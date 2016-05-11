@@ -2,8 +2,7 @@ from setuptools import setup
 
 install_requires = ["dask >= 0.8.2",
                     "scikit-learn >= 0.17.1",
-                    "numpy",
-                    "multipledispatch"]
+                    "numpy"]
 
 setup(name='dask-learn',
       version='0.1.0',
