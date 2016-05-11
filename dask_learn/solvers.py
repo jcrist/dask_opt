@@ -6,50 +6,10 @@ from dask import delayed
 import numpy as np
 from sklearn import clone
 
+from .utils import is_list_of, xy_to_parts
+
 
 __all__ = ['averaged_fit', 'chained_partial_fit', 'logistic_gradient']
-
-
-def is_list_of(x, typ):
-    """Is `x` a list of type `typ`"""
-    return isinstance(x, list) and all(isinstance(i, typ) for i in x)
-
-
-def xy_to_parts(X, y):
-    """Check alignment of `X` and `y`, and return lists of parts for each"""
-    # Extract parts from X
-    if isinstance(X, da.Array):
-        if X.ndim != 2:
-            raise ValueError("X must be 2 dimensional")
-        if len(X.chunks[1]) != 1:
-            X = X.rechunk((X.chunks[0], X.shape[1]))
-        x_parts = X.to_delayed().flatten().tolist()
-    elif is_list_of(X, Delayed):
-        x_parts = X
-    else:
-        raise TypeError("invalid `X` type: {0}".format(type(X)))
-    # Extract parts from y
-    if isinstance(y, da.Array):
-        if y.ndim not in (1, 2):
-            raise ValueError("y must be 1 or 2 dimensional")
-        if y.ndim == 2 and len(y.nchunks[1]) != 1:
-            y = y.rechunk((y.chunks[0], y.shape[1]))
-        y_parts = y.to_delayed().flatten().tolist()
-    elif is_list_of(y, Delayed):
-        y_parts = y
-    else:
-        raise TypeError("invalid `y` type: {0}".format(type(y)))
-    # Alignment checks
-    if isinstance(X, da.Array) and isinstance(y, da.Array):
-        if X.shape[0] != y.shape[0]:
-            raise ValueError("X and y must share first dimension")
-        elif X.chunks[0] != y.chunks[0]:
-            raise ValueError("X and y chunks must be aligned")
-    else:
-        if not len(x_parts) == len(y_parts):
-            raise ValueError("X and y must have the same number "
-                             "of partitions along the first dimension")
-    return x_parts, y_parts
 
 
 @delayed(pure=True)
@@ -120,10 +80,10 @@ def averaged_fit(self, X, y, **kwargs):
     ----------
     self : estimator
         A dask wrapped linear classifier or regressor.
-    X, y: dask.array.Array, list of dask.delayed.Delayed
+    X, y: dask.array.Array, dask.bag.Bag, list of dask.delayed.Delayed
         The X and y arrays to fit. Can be either instances of
-        ``dask.array.Array`` or lists of ``dask.delayed.Delayed`` objects that
-        represent delayed ``ndarray``s.
+        ``dask.array.Array``, ``dask.bag.Bag``, or lists of
+        ``dask.delayed.Delayed`` objects that represent delayed ``ndarray``s.
 
     Returns
     -------
@@ -132,6 +92,7 @@ def averaged_fit(self, X, y, **kwargs):
         estimator.
     """
     x_parts, y_parts = xy_to_parts(X, y)
+    kwargs.pop('classes', None)
     params = self.get_params()
     params.pop('dask_solver')
     cls = self._estimator
@@ -172,10 +133,11 @@ def chained_partial_fit(self, X, y, **kwargs):
     self : estimator
         A dask wrapped linear classifier or regressor supporting
         ``partial_fit``.
-    X, y: dask.array.Array, list of dask.delayed.Delayed
+    X, y: dask.array.Array, dask.bag.Bag, list of dask.delayed.Delayed
         The X and y arrays to fit. Can be either instances of
-        ``dask.array.Array`` or lists of ``dask.delayed.Delayed`` objects that
-        represent delayed ``ndarray``s.
+        ``dask.array.Array``, ``dask.bag.Bag``, or lists of
+        ``dask.delayed.Delayed`` objects that represent delayed ``ndarray``s.
+
     Returns
     -------
     estimator : Delayed
