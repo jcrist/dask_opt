@@ -49,3 +49,11 @@ def xy_to_parts(X, y):
             raise ValueError("X and y must have the same number "
                              "of partitions along the first dimension")
     return x_parts, y_parts
+
+
+def copy_doc(func):
+    """Copy docstring from func"""
+    def _(x):
+        x.__doc__ = func.__doc__
+        return x
+    return _

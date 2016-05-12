@@ -7,7 +7,7 @@ import dask.bag as db
 from sklearn.feature_extraction import text
 
 from ..base import DaskEstimator
-from ..utils import is_list_of
+from ..utils import is_list_of, copy_doc
 
 
 def hashing_vectorizer_transform(x, model=None):
@@ -15,8 +15,10 @@ def hashing_vectorizer_transform(x, model=None):
 
 
 class HashingVectorizer(text.HashingVectorizer, DaskEstimator):
+    __doc__ = text.HashingVectorizer.__doc__
     _estimator = text.HashingVectorizer
 
+    @copy_doc(text.HashingVectorizer.transform)
     def transform(self, X, y=None):
         model = text.HashingVectorizer(**self.get_params())
         if isinstance(X, db.Bag):
@@ -28,3 +30,5 @@ class HashingVectorizer(text.HashingVectorizer, DaskEstimator):
         else:
             raise TypeError("Expected either Bag or list of "
                             "Delayed, got {0}".format(type(X)))
+
+    fit_transform = transform
