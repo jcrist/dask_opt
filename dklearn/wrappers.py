@@ -190,8 +190,8 @@ class Chained(DaskWrapper):
         est = clone(self.estimator)
         x_parts, y_parts = as_lists_of_delayed(X, y)
         if is_classifier(est):
-            classes = kwargs.pop('classes', False)
-            if not classes:
+            classes = kwargs.pop('classes', None)
+            if classes is None:
                 classes = _unique_merge([_unique_chunk(i) for i in y_parts])
             kwargs_2 = {'classes': classes}
             kwargs_2.update(kwargs)
