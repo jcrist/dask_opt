@@ -12,10 +12,11 @@ from .core import LazyDaskEstimator, check_X_y, as_lists_of_delayed
 from .utils import copy_to
 
 
-__all__ = ('DelayedEstimator', 'Averaged')
+__all__ = ('DelayedEstimator', 'Averaged', 'Chained')
 
 
 def _finalize_estimator(res, base):
+    base = clone(base)
     if hasattr(base, '_update_estimator'):
         return base._update_estimator(res[0])
     return copy_to(res[0], base)
