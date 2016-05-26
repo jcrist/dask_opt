@@ -3,12 +3,18 @@ from __future__ import division, print_function, absolute_import
 from functools import partial
 
 import numpy as np
+import dask
+import dask.array as da
+import dask.bag as db
 from dask import threaded
 from dask.base import Base
-from dask.delayed import delayed
+from dask.delayed import delayed, Delayed
 from sklearn.base import clone, is_classifier
+from sklearn.exceptions import NotFittedError
+from sklearn.utils.metaestimators import if_delegate_has_method
 
-from .core import LazyDaskEstimator, check_X_y, as_lists_of_delayed
+from .core import (LazyDaskEstimator, check_X_y, as_lists_of_delayed,
+                   is_list_of)
 from .utils import copy_to
 
 
@@ -60,6 +66,26 @@ class DelayedEstimator(Base):
         raise AttributeError("Attribute '{0}' not found".format(attr))
 
 
+def predict_chunk(est, X):
+    return est.predict(X)
+
+
+def decision_function_chunk(est, X):
+    return est.decision_function(X)
+
+
+def _maybe_concat(x):
+    return np.concatenate(x) if isinstance(x, list) else x
+
+
+@delayed(pure=True)
+def score_chunk(est, X, y, sample_weight=None):
+    X = _maybe_concat(X)
+    y = _maybe_concat(y)
+    sample_weight = _maybe_concat(sample_weight)
+    return est.score(X, y, sample_weight=sample_weight)
+
+
 class DaskWrapper(LazyDaskEstimator):
     """Base class for classes that wrap a single estimator"""
     def __init__(self, estimator):
@@ -72,12 +98,79 @@ class DaskWrapper(LazyDaskEstimator):
         copy_to(x, self.estimator)
         return self
 
+    def __dir__(self):
+        o = set(dir(type(self)))
+        o.update(vars(self))
+        for m in ['fit', 'predict']:
+            if not hasattr(self, m):
+                o.remove(m)
+        return list(o)
+
+    @if_delegate_has_method('estimator')
     def fit(self, X, y, **kwargs):
         compute = kwargs.pop("compute", True)
         res = self._fit(X, y, **kwargs)
         if compute:
             return self._update_estimator(res.compute())
         return self._to_delayed(res)
+
+    @if_delegate_has_method('estimator')
+    def predict(self, X, compute=True):
+        func = partial(predict_chunk, self.estimator)
+        if isinstance(X, da.Array):
+            assert X.ndim == 2
+            if len(X.chunks[1]) != 1:
+                X = X.rechunk((X.chunks[0], X.shape[1]))
+            res = X.map_blocks(func, chunks=(X.chunks[0],), drop_axis=1)
+        elif isinstance(X, db.Bag):
+            res = X.map_partitions(func)
+        elif is_list_of(X, Delayed):
+            func = delayed(func, pure=True)
+            res = [func(i) for i in X]
+            if compute:
+                return list(dask.compute(*res))
+            return res
+        else:
+            return func(X) if compute else delayed(func, pure=True)(X)
+        return res.compute() if compute else res
+
+    @if_delegate_has_method('estimator')
+    def decision_function(self, X, compute=True):
+        func = partial(decision_function_chunk, self.estimator)
+        if is_classifier(self.estimator):
+            if not hasattr(self.estimator, 'classes_'):
+                name = type(self.estimator).__name__
+                raise NotFittedError('{0} not fitted yet'.format(name))
+            n_classes = len(self.estimator.classes_)
+        else:
+            n_classes = None
+        if isinstance(X, da.Array):
+            assert X.ndim == 2
+            if len(X.chunks[1]) != 1:
+                X = X.rechunk((X.chunks[0], X.shape[1]))
+            if n_classes is None or n_classes == 2:
+                res = X.map_blocks(func, chunks=(X.chunks[0],), drop_axis=1)
+            else:
+                res = X.map_blocks(func, chunks=(X.chunks[0], n_classes))
+        elif isinstance(X, db.Bag):
+            res = X.map_partitions(func)
+        elif is_list_of(X, Delayed):
+            func = delayed(func, pure=True)
+            res = [func(i) for i in X]
+            if compute:
+                return list(dask.compute(*res))
+            return res
+        else:
+            return func(X) if compute else delayed(func, pure=True)(X)
+        return res.compute() if compute else res
+
+    @if_delegate_has_method('estimator')
+    def score(self, X, y, sample_weight=None, compute=True):
+        if compute:
+            X, y, sample_weight = dask.compute(X, y, sample_weight)
+            return self.estimator.score(X, y, sample_weight=sample_weight)
+        else:
+            return score_chunk(self.estimator, X, y, sample_weight)
 
 
 @delayed(pure=True)
