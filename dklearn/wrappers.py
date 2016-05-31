@@ -14,7 +14,7 @@ from sklearn.exceptions import NotFittedError
 from sklearn.utils.metaestimators import if_delegate_has_method
 
 from .core import (LazyDaskEstimator, check_X_y, as_lists_of_delayed,
-                   is_list_of)
+                   is_list_of, is_dask_input)
 from .utils import copy_to
 
 
@@ -166,11 +166,12 @@ class DaskWrapper(LazyDaskEstimator):
 
     @if_delegate_has_method('estimator')
     def score(self, X, y, sample_weight=None, compute=True):
-        if compute:
-            X, y, sample_weight = dask.compute(X, y, sample_weight)
+        if any(map(is_dask_input, (X, y, sample_weight))) and compute:
             return self.estimator.score(X, y, sample_weight=sample_weight)
-        else:
-            return score_chunk(self.estimator, X, y, sample_weight)
+        res = score_chunk(self.estimator, X, y, sample_weight)
+        if compute:
+            return res.compute()
+        return res
 
 
 @delayed(pure=True)
@@ -220,9 +221,7 @@ class Averaged(DaskWrapper):
         return average_coefs(chunks)
 
 
-@delayed(pure=True)
-def _unique_chunk(x):
-    return np.unique(x)
+_unique_chunk = delayed(np.unique, pure=True)
 
 
 @delayed(pure=True)
@@ -230,7 +229,7 @@ def _unique_merge(x):
     return np.unique(np.concatenate(x))
 
 
-@delayed(pure=True)
+@delayed(pure=False)
 def partial_fit_chunk(est, x, y, **kwargs):
     return est.partial_fit(x, y, **kwargs)
 
