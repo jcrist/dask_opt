@@ -32,19 +32,24 @@ def test_tokenize_BaseEstimator():
     assert tokenize(fit) != tokenize(fit2)
 
 
-def test_from_sklearn():
-    d = from_sklearn(clf1)
-    assert d.compute() is clf1
-    assert from_sklearn(clf1)._name == d._name
-    assert from_sklearn(clf2)._name != d._name
+def test_Estimator_init():
+    d = Estimator(clf1)
+    d2 = from_sklearn(clf1)
+    assert d._name == d2._name
+    assert Estimator(clf1)._name == d._name
+    assert Estimator(clf2)._name != d._name
+    # estimators are copied instead of mutated
+    assert d._base is not clf1
+
+    with pytest.raises(TypeError):
+        Estimator("not an estimator")
 
 
-def test_constructor():
-    d = Estimator(LogisticRegression(C=1000))
-    assert d._name == from_sklearn(clf1)._name
-
-    with pytest.raises(ValueError):
-        Estimator(clf1, name='foo')
+def test_clone():
+    d = Estimator(clf1)
+    d2 = clone(d)
+    assert d.get_params() == d2.get_params()
+    assert d._base is not d2._base
 
 
 def test__estimator_type():
@@ -53,52 +58,102 @@ def test__estimator_type():
 
 
 def test_get_params():
-    d = from_sklearn(clf1)
+    d = Estimator(clf1)
     assert d.get_params() == clf1.get_params()
     assert d.get_params(deep=False) == clf1.get_params(deep=False)
 
 
 def test_set_params():
-    d = from_sklearn(clf1)
+    d = Estimator(LogisticRegression(C=1000))
+    old_name = d._name
     d2 = d.set_params(C=5)
-    assert isinstance(d2, Estimator)
-    # Check no mutation
-    assert d2.get_params()['C'] == 5
-    assert d2.compute().C == 5
-    assert d.get_params()['C'] == 1000
-    assert d.compute().C == 1000
+    assert d is d2
+    assert d.C == 5
+    assert d._name != old_name
+    d.set_params(C=1000)
+    assert d.C == 1000
+    assert d._name == old_name
+
+
+def test_setattr():
+    d = Estimator(clf1)
+    with pytest.raises(AttributeError):
+        d.C = 10
+
+
+def test_getattr():
+    d = Estimator(clf1)
+    assert d.C == clf1.C
+    with pytest.raises(AttributeError):
+        d.not_a_real_parameter
+
+
+def test_dir():
+    d = Estimator(clf1)
+    attrs = dir(d)
+    assert 'C' in attrs
+
+
+def test_repr():
+    d = Estimator(clf1)
+    res = repr(d)
+    assert res.startswith('Dask')
+
+
+def test_to_sklearn():
+    d = Estimator(clf1)
+    res = d.to_sklearn()
+    assert res is not clf1
+    assert isinstance(res, LogisticRegression)
+
+    res = d.to_sklearn(compute=False)
+    assert isinstance(res, Delayed)
+    assert isinstance(res.compute(), LogisticRegression)
+
+    # After fitting
+    d.fit(X_iris, y_iris)
+    res = d.to_sklearn()
+    assert isinstance(res, LogisticRegression)
+
+    res = d.to_sklearn(compute=False)
+    assert isinstance(res, Delayed)
+    assert isinstance(res.compute(), LogisticRegression)
 
 
 def test_fit():
-    d = from_sklearn(clf1)
+    d = Estimator(clf1)
     fit = d.fit(X_iris, y_iris)
-    assert fit is not d
-    assert isinstance(fit, Estimator)
+    assert fit is d
+    assert not hasattr(d, 'coef_')
 
-    res = fit.compute()
+    res = d.compute()
+    assert res is not d
+    assert isinstance(res, Estimator)
     assert hasattr(res, 'coef_')
-    assert not hasattr(clf1, 'coef_')
+    assert not hasattr(d, 'coef_')
 
 
 def test_predict():
-    d = from_sklearn(clf1)
-    fit = d.fit(X_iris, y_iris)
-    pred = fit.predict(X_iris)
+    d = Estimator(clf1)
+    d.fit(X_iris, y_iris)
+    pred = d.predict(X_iris)
     assert isinstance(pred, Delayed)
     res = pred.compute()
     assert isinstance(res, np.ndarray)
-    will_error = d.predict(X_iris)
+
+    will_error = from_sklearn(clf1).predict(X_iris)
     with pytest.raises(NotFittedError):
         will_error.compute()
 
 
 def test_score():
-    d = from_sklearn(clf1)
-    fit = d.fit(X_iris, y_iris)
-    s = fit.score(X_iris, y_iris)
+    d = Estimator(clf1)
+    d.fit(X_iris, y_iris)
+    s = d.score(X_iris, y_iris)
     assert isinstance(s, Delayed)
     res = s.compute()
     assert isinstance(res, float)
-    will_error = d.score(X_iris, y_iris)
+
+    will_error = from_sklearn(clf1).score(X_iris, y_iris)
     with pytest.raises(NotFittedError):
         will_error.compute()
