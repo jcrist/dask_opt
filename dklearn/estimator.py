@@ -4,13 +4,11 @@ from copy import deepcopy
 from operator import getitem
 
 from sklearn.base import clone, BaseEstimator
-from dask.base import tokenize, Base, normalize_token
+from dask.base import tokenize, normalize_token
 from dask.delayed import Delayed
-from dask.optimize import fuse
-from dask.threaded import get as threaded_get
 from toolz import partial
 
-from .core import unpack_arguments, from_sklearn
+from .core import DaskBaseEstimator, unpack_arguments, from_sklearn
 
 
 def _fit(est, X, y, kwargs):
@@ -51,11 +49,13 @@ class ClassProxy(object):
     def __call__(self, *args, **kwargs):
         return Estimator(self.cls(*args, **kwargs))
 
+    @property
+    def __mro__(self):
+        return self.cls.__mro__
 
-class Estimator(Base, BaseEstimator):
-    _default_get = staticmethod(threaded_get)
+
+class Estimator(DaskBaseEstimator, BaseEstimator):
     _finalize = staticmethod(lambda res: Estimator(res[0]))
-    _optimize = staticmethod(lambda d, k, **kws: fuse(d, k)[0])
 
     def __init__(self, est, copy=True):
         if not isinstance(est, BaseEstimator):
@@ -66,9 +66,11 @@ class Estimator(Base, BaseEstimator):
         self._base = est
         self._reset()
 
-    def _reset(self, fastpath=False):
+    def _reset(self, full=False):
         """Reset the base graph for lazy computations."""
-        self._name = name = 'from_sklearn-' + tokenize(self._base)
+        if full:
+            self._base = clone(self._base)
+        self._name = name = 'estimator-' + tokenize(self._base)
         self.dask = {name: self._base}
 
     def _keys(self):
@@ -125,8 +127,7 @@ class Estimator(Base, BaseEstimator):
 
     def fit(self, X, y, **kwargs):
         # Remove all fit (`foo_`) attributes, reset graph
-        self._base = clone(self._base)
-        self._reset()
+        self._reset(full=True)
         # Construct the fit step
         name = 'fit-' + tokenize(self, X, y, kwargs)
         X, y, dsk = unpack_arguments(X, y)
@@ -136,10 +137,9 @@ class Estimator(Base, BaseEstimator):
         self.dask = dsk
         return self
 
-    def _fit_transform(self, X, y, **kwargs):
+    def fit_transform(self, X, y, **kwargs):
         # Remove all fit (`foo_`) attributes, reset graph
-        self._base = clone(self._base)
-        self._reset()
+        self._reset(full=True)
         # Construct the fit and transform steps
         token = tokenize(self, X, y, kwargs)
         fit_tr_name = 'fit-transform-' + token
@@ -153,11 +153,7 @@ class Estimator(Base, BaseEstimator):
         dsk2[tr_name] = (getitem, fit_tr_name, 1)
         self._name = fit_name
         self.dask = dsk
-        return self, Delayed(tr_name, [dsk2])
-
-    def fit_transform(self, X, y, **kwargs):
-        _, Xt = self._fit_transform(X, y, **kwargs)
-        return Xt
+        return Delayed(tr_name, [dsk2])
 
     def predict(self, X):
         name = 'predict-' + tokenize(self, X)

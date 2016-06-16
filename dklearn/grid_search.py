@@ -5,7 +5,7 @@ from dask import threaded
 from dask.base import tokenize
 from dask.context import _globals
 from dask.delayed import Delayed
-from sklearn.base import is_classifier, BaseEstimator
+from sklearn.base import is_classifier, BaseEstimator, clone
 from sklearn.cross_validation import check_cv
 from sklearn.grid_search import (_CVScoreTuple, _check_param_grid,
                                  ParameterGrid, ParameterSampler)
@@ -15,9 +15,9 @@ from sklearn.utils import indexable, safe_indexing
 from .core import from_sklearn, unpack_arguments
 
 
-def _fit_and_score(estimator, X_name, y_name, scorer, train, test,
+def _fit_and_score(est, X_name, y_name, scorer, train, test,
                    parameters, fit_params):
-    estimator = estimator.set_params(**parameters)
+    est.set_params(**parameters)
     n_samples = len(test)
 
     # Extract train and test data
@@ -34,14 +34,14 @@ def _fit_and_score(estimator, X_name, y_name, scorer, train, test,
     dsk[y_test_name] = (safe_indexing, y_name, test)
 
     # Fit
-    fit = estimator.fit(Delayed(X_train_name, [dsk]),
-                        Delayed(y_train_name, [dsk]),
-                        **fit_params)
+    est.fit(Delayed(X_train_name, [dsk]),
+            Delayed(y_train_name, [dsk]),
+            **fit_params)
     # Score
-    score_name = 'score-' + tokenize(scorer, fit, X_test_name, y_test_name)
-    fit_key, dsk2 = unpack_arguments(fit)
-    dsk.update(dsk2)
-    dsk[score_name] = (scorer, fit_key, X_test_name, y_test_name)
+    sk_est = est.to_sklearn(compute=False)
+    score_name = 'score-' + tokenize(scorer, sk_est, X_test_name, y_test_name)
+    dsk.update(sk_est.dask)
+    dsk[score_name] = (scorer, sk_est.key, X_test_name, y_test_name)
 
     return n_samples, score_name, dsk
 
@@ -97,9 +97,9 @@ class BaseSearchCV(BaseEstimator):
         return self.estimator._estimator_type
 
     def _fit(self, X, y, parameter_iterable):
-        estimator = self.estimator
+        estimator = clone(self.estimator)
         self.scorer_ = check_scoring(estimator, scoring=self.scoring)
-        cv = check_cv(self.cv, y, classifier=is_classifier(estimator))
+        cv = check_cv(self.cv, X, y, classifier=is_classifier(estimator))
 
         n_folds = len(cv)
         X, y = indexable(X, y)
@@ -120,9 +120,10 @@ class BaseSearchCV(BaseEstimator):
         parameters = []
         for params in parameter_iterable:
             for train, test in cv:
-                n, score_key, dsk2 = _fit_and_score(estimator, X_name, y_name,
-                                                    self.scorer_, train, test,
-                                                    params, self.fit_params)
+                n, score_key, dsk2 = _fit_and_score(clone(estimator), X_name,
+                                                    y_name, self.scorer_,
+                                                    train, test, params,
+                                                    self.fit_params)
                 dsk.update(dsk2)
                 score_keys.append(score_key)
                 n_samples.append(n)
