@@ -10,9 +10,9 @@ from sklearn.datasets import load_digits
 from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import LogisticRegression
+from toolz import dissoc
 
 from dklearn import from_sklearn
-from dklearn.estimator import Estimator
 from dklearn.pipeline import Pipeline
 
 digits = load_digits()
@@ -69,8 +69,17 @@ def test__estimator_type():
 
 def test_get_params():
     d = from_sklearn(pipe1)
-    assert d.get_params() == pipe1.get_params()
-    assert d.get_params(deep=False) == pipe1.get_params(deep=False)
+    params1 = d.get_params()
+    params2 = pipe1.get_params()
+    assert (dissoc(params1, 'steps', 'logistic', 'pca') ==
+            dissoc(params2, 'steps', 'logistic', 'pca'))
+    params1 = d.get_params(deep=False)
+    params2 = pipe1.get_params(deep=False)
+    for dkstep, skstep in zip(params1['steps'], params2['steps']):
+        # names are equivalent
+        assert dkstep[0] == skstep[0]
+        # ests have same params
+        assert dkstep[1].get_params() == skstep[1].get_params()
 
 
 def test_set_params():
@@ -78,28 +87,25 @@ def test_set_params():
     d2 = d.set_params(pca__n_components=20, logistic__C=100)
     assert isinstance(d2, Pipeline)
     assert d2._name == from_sklearn(pipe2)._name
-    # Check no mutation
-    assert d2.get_params()['logistic__C'] == 100
-    assert d2.compute().get_params()['logistic__C'] == 100
-    assert d.get_params()['logistic__C'] == 1000
-    assert d.compute().get_params()['logistic__C'] == 1000
 
 
-def test_named_steps():
+def test_setattr():
     d = from_sklearn(pipe1)
-    steps = d.named_steps
-    assert isinstance(steps['pca'], Estimator)
-    assert isinstance(steps['logistic'], Estimator)
+    with pytest.raises(AttributeError):
+        d.C = 10
 
 
 def test_fit():
     d = from_sklearn(pipe1)
     fit = d.fit(X_digits, y_digits)
-    assert fit is not d
-    assert isinstance(fit, Pipeline)
+    assert fit is d
 
-    res = fit.compute()
-    assert isinstance(res, pipeline.Pipeline)
+    res = d.compute()
+    assert isinstance(res, Pipeline)
+    assert res is not d
+    assert hasattr(res.named_steps['logistic'], 'coef_')
+    assert not hasattr(d.named_steps['logistic'], 'coef_')
+
     assert hasattr(res, 'classes_')
     assert not hasattr(pipe1, 'classes_')
 
@@ -111,7 +117,8 @@ def test_predict():
     assert isinstance(pred, Delayed)
     res = pred.compute()
     assert isinstance(res, np.ndarray)
-    will_error = d.predict(X_digits)
+
+    will_error = from_sklearn(pipe1).predict(X_digits)
     with pytest.raises(NotFittedError):
         will_error.compute()
 
@@ -123,6 +130,28 @@ def test_score():
     assert isinstance(s, Delayed)
     res = s.compute()
     assert isinstance(res, float)
-    will_error = d.score(X_digits, y_digits)
+
+    will_error = from_sklearn(pipe1).score(X_digits, y_digits)
     with pytest.raises(NotFittedError):
         will_error.compute()
+
+
+def test_to_sklearn():
+    d = from_sklearn(pipe1)
+    res = d.to_sklearn()
+    assert isinstance(res, pipeline.Pipeline)
+    assert isinstance(res.named_steps['logistic'], LogisticRegression)
+
+    res = d.to_sklearn(compute=False)
+    assert isinstance(res, Delayed)
+    assert isinstance(res.compute(), pipeline.Pipeline)
+
+    # After fitting
+    d.fit(X_digits, y_digits)
+    res = d.to_sklearn()
+    assert isinstance(res, pipeline.Pipeline)
+    assert isinstance(res.named_steps['logistic'], LogisticRegression)
+
+    res = d.to_sklearn(compute=False)
+    assert isinstance(res, Delayed)
+    assert isinstance(res.compute(), pipeline.Pipeline)

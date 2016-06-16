@@ -1,36 +1,42 @@
 from __future__ import absolute_import, print_function, division
 
 from dask.base import tokenize
+from dask.delayed import delayed
 from sklearn import pipeline
 
 from .core import DaskBaseEstimator, from_sklearn
 
 
-class Pipeline(DaskBaseEstimator):
+class Pipeline(DaskBaseEstimator, pipeline.Pipeline):
+    _finalize = staticmethod(lambda res: Pipeline(res[0]))
 
     def __init__(self, steps):
-        self.steps = [(k, from_sklearn(v)) for k, v in steps]
-        self._est = pipeline.Pipeline([(n, s._est) for n, s in self.steps])
-        self._name = 'pipeline-' + tokenize('Pipeline', steps)
+        # Run the sklearn init to validate the pipeline steps
+        steps = pipeline.Pipeline(steps).steps
+        steps = [(k, from_sklearn(v)) for k, v in steps]
+        object.__setattr__(self, 'steps', steps)
+        self._reset()
 
-    @staticmethod
-    def _finalize(res):
-        return pipeline.Pipeline(res[0])
+    def _reset(self, full=False):
+        if full:
+            for n, s in self.steps:
+                s._reset(full=True)
+        self._name = 'pipeline-' + tokenize(self.steps)
+        self._dask = None
 
     @property
     def dask(self):
-        if hasattr(self, '_dask'):
-            return self._dask
-        dsk = {}
-        names = []
-        tasks = []
-        for n, s in self.steps:
-            dsk.update(s.dask)
-            names.append(n)
-            tasks.append((s._finalize, s._keys()))
-        dsk[self._name] = (list, (zip, names, tasks))
-        self._dask = dsk
-        return dsk
+        if self._dask is None:
+            dsk = {}
+            names = []
+            tasks = []
+            for n, s in self.steps:
+                dsk.update(s.dask)
+                names.append(n)
+                tasks.append((s._finalize, s._keys()))
+            dsk[self._name] = (list, (zip, names, tasks))
+            self._dask = dsk
+        return self._dask
 
     def _keys(self):
         return [self._name]
@@ -41,17 +47,25 @@ class Pipeline(DaskBaseEstimator):
             raise TypeError("est must be a sklearn Pipeline")
         return cls(est.steps)
 
-    @property
-    def named_steps(self):
-        return dict(self.steps)
+    def to_sklearn(self, compute=True):
+        steps = [(n, s.to_sklearn(compute=False)) for n, s in self.steps]
+        pipe = delayed(pipeline.Pipeline, pure=True)
+        res = pipe(steps, dask_key_name='to_sklearn-' + self._name)
+        if compute:
+            return res.compute()
+        return res
 
-    @property
-    def _final_estimator(self):
-        return self.steps[-1][1]
+    def set_params(self, **params):
+        super(Pipeline, self).set_params(**params)
+        self._reset()
+        return self
 
-    @property
-    def _estimator_type(self):
-        return self._final_estimator._estimator_type
+    def __setattr__(self, k, v):
+        if k in ('_name', '_dask'):
+            object.__setattr__(self, k, v)
+        else:
+            raise AttributeError("Attribute setting not permitted. "
+                                 "Use `set_params` to change parameters")
 
     def _pre_transform(self, Xt, y=None, **fit_params):
         # Separate out parameters
@@ -60,19 +74,20 @@ class Pipeline(DaskBaseEstimator):
             step, param = pname.split('__', 1)
             fit_params_steps[step][param] = pval
         # Call fit_transform on all but last estimator
-        fit_steps = []
         for name, transform in self.steps[:-1]:
             kwargs = fit_params_steps[name]
-            fit, Xt = transform._fit_transform(Xt, y, **kwargs)
-            fit_steps.append(fit)
-        return fit_steps, Xt, fit_params_steps[self.steps[-1][0]]
+            Xt = transform.fit_transform(Xt, y, **kwargs)
+        return Xt, fit_params_steps[self.steps[-1][0]]
 
     def fit(self, X, y=None, **fit_params):
-        fit_steps, Xt, params = self._pre_transform(X, y, **fit_params)
-        fit = self._final_estimator.fit(Xt, y, **params)
-        fit_steps.append(fit)
-        new_steps = [(old[0], s) for old, s in zip(self.steps, fit_steps)]
-        return Pipeline(new_steps)
+        # Reset graph
+        self._reset(full=True)
+        # Perform the fit
+        name = 'fit-' + tokenize(self, X, y, fit_params)
+        Xt, params = self._pre_transform(X, y, **fit_params)
+        self._final_estimator.fit(Xt, y, **params)
+        self._name = name
+        return self
 
     def transform(self, X):
         for name, transform in self.steps:
@@ -89,12 +104,15 @@ class Pipeline(DaskBaseEstimator):
             X = transform.transform(X)
         return self._final_estimator.score(X, y)
 
-    def _fit_transform(self, X, y=None, **fit_params):
-        fit_steps, Xt, params = self._pre_transform(X, y, **fit_params)
-        fit, Xt = self._final_estimator._fit_transform(X, y, **params)
-        fit_steps.append(fit)
-        new_steps = [(old[0], s) for old, s in zip(self.steps, fit_steps)]
-        return Pipeline(new_steps), Xt
+    def fit_transform(self, X, y=None, **fit_params):
+        # Reset graph
+        self._reset(full=True)
+        # Perform the fit and transform
+        name = 'fit-' + tokenize(self, X, y, fit_params)
+        Xt, params = self._pre_transform(X, y, **fit_params)
+        Xt = self._final_estimator.fit_transform(Xt, y, **params)
+        self._name = name
+        return self, Xt
 
 
 from_sklearn.dispatch.register(pipeline.Pipeline, Pipeline.from_sklearn)
