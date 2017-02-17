@@ -2,12 +2,12 @@ from __future__ import absolute_import, division, print_function
 
 from operator import getitem
 import warnings
+import copy
 
 import numpy as np
 from scipy import sparse
 
 from dask.base import tokenize
-from sklearn.base import clone
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
@@ -31,6 +31,14 @@ def warn_fit_failure(error_score, e):
 
 def fit_failure_to_error_score(scores, error_score):
     return [error_score if s is FIT_FAILURE else s for s in scores]
+
+
+def copy_estimator(est):
+    # Semantically, we'd like to use `sklearn.clone` here instead. However,
+    # `sklearn.clone` isn't threadsafe, so we don't want to call it in
+    # tasks.  Since `est` is guaranteed to not be a fit estimator, we can
+    # use `copy.deepcopy` here without fear of copying large data.
+    return copy.deepcopy(est)
 
 
 # ----------------------- #
@@ -70,7 +78,7 @@ def fit(est, X, y, fit_params, error_score='raise'):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE
     try:
-        est = clone(est)
+        est = copy_estimator(est)
         est.fit(X, y, **fit_params)
     except Exception as e:
         if error_score == 'raise':
@@ -84,7 +92,7 @@ def fit_transform(est, X, y, fit_params, error_score='raise'):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE, FIT_FAILURE
     try:
-        est = clone(est)
+        est = copy_estimator(est)
         if hasattr(est, 'fit_transform'):
             Xt = est.fit_transform(X, y, **fit_params)
         else:
