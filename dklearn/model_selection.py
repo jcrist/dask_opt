@@ -9,19 +9,18 @@ from dask.utils import derived_from
 
 import numpy as np
 
-from sklearn.base import (clone, is_classifier, BaseEstimator,
-                          MetaEstimatorMixin)
+from sklearn.base import clone, BaseEstimator, MetaEstimatorMixin
 from sklearn.exceptions import NotFittedError
 from sklearn import model_selection
-from sklearn.model_selection._split import check_cv
 from sklearn.model_selection._search import _check_param_grid, BaseSearchCV
 from sklearn.metrics.scorer import check_scoring
 from sklearn.utils.fixes import rankdata, MaskedArray
 from sklearn.utils.metaestimators import if_delegate_has_method
-from sklearn.utils.validation import indexable, check_is_fitted
+from sklearn.utils.validation import check_is_fitted
 
-from .core import (initialize_dask_graph, do_fit_and_score,
-                   fit_failure_to_error_score)
+from .core import do_fit_and_score, fit_failure_to_error_score
+from .split import initialize_dask_graph
+from .utils import to_indexable
 
 
 class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
@@ -112,7 +111,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
     def _fit(self, X, y=None, groups=None, **fit_params):
         estimator = self.estimator
-        cv = check_cv(self.cv, y, classifier=is_classifier(estimator))
         self.scorer_ = check_scoring(estimator, scoring=self.scoring)
 
         error_score = self.error_score
@@ -122,11 +120,10 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
         # Regenerate parameter iterable for each fit
         candidate_params = list(self._get_param_iterator())
+        X, y, groups = to_indexable(X, y, groups)
 
-        X, y, groups = indexable(X, y, groups)
-
-        (dsk, X_train, y_train, X_test,
-         y_test, n_splits) = initialize_dask_graph(estimator, X, y, cv, groups)
+        (dsk, X_train, y_train, X_test, y_test,
+         n_splits) = initialize_dask_graph(estimator, self.cv, X, y, groups)
 
         keys = []
         for parameters in candidate_params:
@@ -185,7 +182,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         if self.refit:
             # fit the best estimator using the entire dataset
             best_parameters = candidate_params[self.best_index_]
-            best = estimator.set_params(**best_parameters)
+            best = clone(estimator).set_params(**best_parameters)
             best = (best.fit(X, y, **fit_params) if y is not None
                     else best.fit(X, **fit_params))
             self.best_estimator_ = best

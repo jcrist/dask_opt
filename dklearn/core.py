@@ -10,7 +10,6 @@ from scipy import sparse
 from dask.base import tokenize
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
-from sklearn.utils import safe_indexing
 from sklearn.utils.validation import _num_samples
 
 from .normalize import normalize_estimator
@@ -112,79 +111,9 @@ def score(est, X, y, scorer):
     return scorer(est, X) if y is None else scorer(est, X, y)
 
 
-def cv_split(cv, X, y, groups):
-    return list(cv.split(X, y, groups))
-
-
-def cv_extract(X, y, splits, is_pairwise=False, is_train=True):
-    if is_train:
-        indices = indices2 = splits[0]
-    else:
-        indices2, indices = splits
-    if is_pairwise:
-        if not hasattr(X, "shape"):
-            raise ValueError("Precomputed kernels or affinity matrices have "
-                            "to be passed as arrays or sparse matrices.")
-        if X.shape[0] != X.shape[1]:
-            raise ValueError("X should be a square kernel matrix")
-        X_subset = X[np.ix_(indices, indices2)]
-    else:
-        X_subset = safe_indexing(X, indices)
-
-    y_subset = None if y is None else safe_indexing(y, indices)
-
-    return X_subset, y_subset
-
-
 # -------------- #
 # Main Functions #
 # -------------- #
-
-def initialize_dask_graph(estimator, X, y, cv, groups):
-    """Initialize a dask graph and key names for a CV run.
-
-    Parameters
-    ----------
-    estimator
-    X, y : array_like
-    cv : BaseCrossValidator
-    groups : array_like
-    """
-    is_pairwise = getattr(estimator, '_pairwise', False)
-    n_splits = cv.get_n_splits(X, y, groups)
-
-    X_name = 'X-' + tokenize(X)
-    y_name = 'y-' + tokenize(y)
-    dsk = {X_name: X, y_name: y}
-
-    # TODO: for certain CrossValidator classes, should be able to generate the
-    # `nth` split individually, removing the single task bottleneck we
-    # currently have.
-    cv_token = tokenize(cv, X_name, y_name, groups)
-    cv_name = 'cv-split-' + cv_token
-    dsk[cv_name] = (cv_split, cv, X_name, y_name, groups)
-    dsk.update(((cv_name, n), (getitem, cv_name, n)) for n in range(n_splits))
-
-    # Extract the test-train subsets
-    Xy_train = 'Xy-train-' + cv_token
-    X_train = 'X-train-' + cv_token
-    y_train = 'y-train-' + cv_token
-    Xy_test = 'Xy-test-' + cv_token
-    X_test = 'X-test-' + cv_token
-    y_test = 'y-test-' + cv_token
-    for n in range(n_splits):
-        dsk[(Xy_train, n)] = (cv_extract, X_name, y_name, (cv_name, n),
-                              is_pairwise, True)
-        dsk[(X_train, n)] = (getitem, (Xy_train, n), 0)
-        dsk[(y_train, n)] = (getitem, (Xy_train, n), 1)
-        dsk[(Xy_test, n)] = (cv_extract, X_name, y_name, (cv_name, n),
-                             is_pairwise, False)
-        dsk[(X_test, n)] = (getitem, (Xy_test, n), 0)
-        dsk[(y_test, n)] = (getitem, (Xy_test, n), 1)
-
-    return dsk, X_train, y_train, X_test, y_test, n_splits
-
-
 def do_fit_and_score(dsk, est, X_train, y_train, X_test, y_test, n_splits,
                      scorer, fit_params, error_score, return_train_score):
     # Fit the estimator on the training data
