@@ -18,8 +18,8 @@ from sklearn.utils.fixes import rankdata, MaskedArray
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils.validation import check_is_fitted
 
-from .core import do_fit_and_score, fit_failure_to_error_score
-from .split import initialize_dask_graph
+from .core import (initialize_dask_graph, do_fit_and_score,
+                   fit_failure_to_error_score)
 from .utils import to_indexable
 
 
@@ -112,7 +112,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     def _fit(self, X, y=None, groups=None, **fit_params):
         estimator = self.estimator
         self.scorer_ = check_scoring(estimator, scoring=self.scoring)
-
         error_score = self.error_score
         if not (isinstance(error_score, Number) or error_score == 'raise'):
             raise ValueError("error_score must be the string 'raise' or a"
@@ -143,37 +142,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         get = self.get or dask.context._globals.get('get') or threaded_get
         out = get(dsk, keys)
 
-        if self.return_train_score:
-            train_scores, test_scores, test_sample_counts = zip(*out)
-            train_scores = fit_failure_to_error_score(train_scores, error_score)
-        else:
-            test_scores, test_sample_counts = zip(*out)
-
-        test_scores = fit_failure_to_error_score(test_scores, error_score)
-
-        # Construct the `cv_results_` dictionary
-        results = {'params': candidate_params}
-        n_candidates = len(candidate_params)
-        test_sample_counts = np.array(test_sample_counts[:n_splits], dtype=int)
-
-        _store(results, 'test_score', test_scores, n_splits, n_candidates,
-               splits=True, rank=True,
-               weights=test_sample_counts if self.iid else None)
-        if self.return_train_score:
-            _store(results, 'train_score', train_scores,
-                   n_splits, n_candidates, splits=True)
-
-        # Use one MaskedArray and mask all the places where the param is not
-        # applicable for that candidate. Use defaultdict as each candidate may
-        # not contain all the params
-        param_results = defaultdict(lambda: MaskedArray(np.empty(n_candidates),
-                                                        mask=True,
-                                                        dtype=object))
-        for cand_i, params in enumerate(candidate_params):
-            for name, value in params.items():
-                param_results["param_%s" % name][cand_i] = value
-
-        results.update(param_results)
+        results = _build_results(out, candidate_params, n_splits, error_score,
+                                 self.iid, self.return_train_score)
 
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
         self.cv_results_ = results
@@ -233,6 +203,41 @@ def _store(results, key_name, array, n_splits, n_candidates,
     if rank:
         results["rank_%s" % key_name] = np.asarray(
             rankdata(-array_means, method='min'), dtype=np.int32)
+
+
+def _build_results(output, candidate_params, n_splits, error_score,
+                   iid, return_train_score):
+    if return_train_score:
+        train_scores, test_scores, test_sample_counts = zip(*output)
+        train_scores = fit_failure_to_error_score(train_scores, error_score)
+    else:
+        test_scores, test_sample_counts = zip(*output)
+
+    test_scores = fit_failure_to_error_score(test_scores, error_score)
+    # Construct the `cv_results_` dictionary
+    results = {'params': candidate_params}
+    n_candidates = len(candidate_params)
+    test_sample_counts = np.array(test_sample_counts[:n_splits], dtype=int)
+
+    _store(results, 'test_score', test_scores, n_splits, n_candidates,
+           splits=True, rank=True,
+           weights=test_sample_counts if iid else None)
+    if return_train_score:
+        _store(results, 'train_score', train_scores,
+               n_splits, n_candidates, splits=True)
+
+    # Use one MaskedArray and mask all the places where the param is not
+    # applicable for that candidate. Use defaultdict as each candidate may
+    # not contain all the params
+    param_results = defaultdict(lambda: MaskedArray(np.empty(n_candidates),
+                                                    mask=True,
+                                                    dtype=object))
+    for cand_i, params in enumerate(candidate_params):
+        for name, value in params.items():
+            param_results["param_%s" % name][cand_i] = value
+
+    results.update(param_results)
+    return results
 
 
 class DaskGridSearchCV(DaskBaseSearchCV):
