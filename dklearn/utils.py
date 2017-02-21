@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import dask.array as da
 from dask.base import Base, tokenize
@@ -58,3 +60,11 @@ def num_samples(x):
         return _num_samples(x)
 
     return delayed(_num_samples, pure=True)(x).compute()
+
+
+def copy_estimator(est):
+    # Semantically, we'd like to use `sklearn.clone` here instead. However,
+    # `sklearn.clone` isn't threadsafe, so we don't want to call it in
+    # tasks.  Since `est` is guaranteed to not be a fit estimator, we can
+    # use `copy.deepcopy` here without fear of copying large data.
+    return copy.deepcopy(est)

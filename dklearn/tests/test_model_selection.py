@@ -21,7 +21,6 @@ def test_visualize():
     gs = DaskGridSearchCV(clf, grid).fit(X, y)
 
     assert hasattr(gs, 'dask_graph_')
-    assert hasattr(gs, 'dask_keys_')
 
     with tmpdir() as d:
         gs.visualize(filename=os.path.join(d, 'mydask'))

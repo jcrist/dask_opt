@@ -1,9 +1,9 @@
 from __future__ import absolute_import, division, print_function
 
-import copy
 import numbers
 import warnings
 from operator import getitem
+from collections import defaultdict
 
 import numpy as np
 from scipy import sparse
@@ -13,7 +13,7 @@ from dask.delayed import delayed
 from dask.base import Base, tokenize
 from dask.utils import Dispatch
 
-from sklearn.base import is_classifier
+from sklearn.base import is_classifier, clone
 from sklearn.exceptions import FitFailedWarning
 from sklearn.model_selection import check_cv as _sklearn_check_cv
 from sklearn.model_selection._split import (_BaseKFold,
@@ -28,12 +28,14 @@ from sklearn.model_selection._split import (_BaseKFold,
                                             _CVIterableWrapper)
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
+from sklearn.utils.fixes import rankdata, MaskedArray
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import _num_samples, check_consistent_length
 
 from .normalize import normalize_estimator
 
-from .utils import unique, num_samples, to_keys
+from .utils import unique, num_samples, to_keys, copy_estimator, to_indexable
+
 
 # A singleton to indicate a failed estimator fit
 FIT_FAILURE = type('FitFailure', (object,),
@@ -46,18 +48,6 @@ def warn_fit_failure(error_score, e):
     warnings.warn("Classifier fit failed. The score on this train-test"
                   " partition for these parameters will be set to %f. "
                   "Details: \n%r" % (error_score, e), FitFailedWarning)
-
-
-def fit_failure_to_error_score(scores, error_score):
-    return [error_score if s is FIT_FAILURE else s for s in scores]
-
-
-def copy_estimator(est):
-    # Semantically, we'd like to use `sklearn.clone` here instead. However,
-    # `sklearn.clone` isn't threadsafe, so we don't want to call it in
-    # tasks.  Since `est` is guaranteed to not be a fit estimator, we can
-    # use `copy.deepcopy` here without fear of copying large data.
-    return copy.deepcopy(est)
 
 
 # ----------------------- #
@@ -151,23 +141,118 @@ def score(est, X, y, scorer):
     return scorer(est, X) if y is None else scorer(est, X, y)
 
 
+def _store(results, key_name, array, n_splits, n_candidates,
+           weights=None, splits=False, rank=False):
+    """A small helper to store the scores/times to the cv_results_"""
+    # When iterated first by parameters then by splits
+    array = np.array(array, dtype=np.float64).reshape(n_candidates, n_splits)
+    if splits:
+        for split_i in range(n_splits):
+            results["split%d_%s" % (split_i, key_name)] = array[:, split_i]
+
+    array_means = np.average(array, axis=1, weights=weights)
+    results['mean_%s' % key_name] = array_means
+    # Weighted std is not directly available in numpy
+    array_stds = np.sqrt(np.average((array - array_means[:, np.newaxis]) ** 2,
+                                    axis=1, weights=weights))
+    results['std_%s' % key_name] = array_stds
+
+    if rank:
+        results["rank_%s" % key_name] = np.asarray(
+            rankdata(-array_means, method='min'), dtype=np.int32)
+
+
+def create_cv_results(output, candidate_params, n_splits, error_score,
+                      iid, return_train_score):
+    if return_train_score:
+        train_scores, test_scores, test_sample_counts = zip(*output)
+        train_scores = [error_score if s is FIT_FAILURE else s
+                        for s in train_scores]
+    else:
+        test_scores, test_sample_counts = zip(*output)
+
+    test_scores = [error_score if s is FIT_FAILURE else s for s in test_scores]
+    # Construct the `cv_results_` dictionary
+    results = {'params': candidate_params}
+    n_candidates = len(candidate_params)
+    test_sample_counts = np.array(test_sample_counts[:n_splits], dtype=int)
+
+    _store(results, 'test_score', test_scores, n_splits, n_candidates,
+           splits=True, rank=True,
+           weights=test_sample_counts if iid else None)
+    if return_train_score:
+        _store(results, 'train_score', train_scores,
+               n_splits, n_candidates, splits=True)
+
+    # Use one MaskedArray and mask all the places where the param is not
+    # applicable for that candidate. Use defaultdict as each candidate may
+    # not contain all the params
+    param_results = defaultdict(lambda: MaskedArray(np.empty(n_candidates),
+                                                    mask=True,
+                                                    dtype=object))
+    for cand_i, params in enumerate(candidate_params):
+        for name, value in params.items():
+            param_results["param_%s" % name][cand_i] = value
+
+    results.update(param_results)
+    return results
+
+
+def get_best_params(candidate_params, cv_results):
+    best_index = np.flatnonzero(cv_results["rank_test_score"] == 1)[0]
+    return candidate_params[best_index]
+
+
+def fit_best(estimator, params, X, y, fit_params):
+    estimator = copy_estimator(estimator).set_params(**params)
+    estimator.fit(X, y, **fit_params)
+    return estimator
+
+
 # -------------- #
 # Main Functions #
 # -------------- #
 
+def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
+                groups=None, fit_params=None, iid=True, refit=True,
+                error_score='raise', return_train_score=True):
 
-def initialize_dask_graph(estimator, cv, X, y, groups):
-    """Initialize the dask graph for CV search.
-
-    Parameters
-    ----------
-    estimator : BaseEstimator
-    cv : cross validation object, integer, or None
-    X, y, groups : array_like, dask_object, or None
-    """
+    X, y, groups = to_indexable(X, y, groups)
+    fit_params = fit_params or {}
     cv = check_cv(cv, y, is_classifier(estimator))
+    # "pairwise" estimators require a different graph for CV splitting
     is_pairwise = getattr(estimator, '_pairwise', False)
-    return splitter(cv).build_graph(X, y, groups, is_pairwise)
+
+    (dsk, n_splits,
+     X_name, y_name,
+     X_train, y_train,
+     X_test, y_test) = splitter(cv).build_graph(X, y, groups, is_pairwise)
+
+    scores = []
+    for parameters in candidate_params:
+        est = clone(estimator).set_params(**parameters)
+        score = do_fit_and_score(dsk, est, X_train, y_train, X_test,
+                                 y_test, n_splits, scorer,
+                                 fit_params=fit_params,
+                                 error_score=error_score,
+                                 return_train_score=return_train_score)
+        scores.extend([[(s, n) for s in score] for n in range(n_splits)])
+
+    token = tokenize(scores)
+    cv_results = 'cv-results-' + token
+    dsk[cv_results] = (create_cv_results, scores, candidate_params, n_splits,
+                       error_score, iid, return_train_score)
+    keys = [cv_results]
+
+    if refit:
+        best_params = 'best-params-' + token
+        dsk[best_params] = (get_best_params, candidate_params, cv_results)
+        best_estimator = 'best-estimator-' + token
+        dsk[best_estimator] = (fit_best, clone(estimator), best_params,
+                               X_name, y_name, fit_params)
+        keys.append(best_estimator)
+
+    return dsk, keys, n_splits
 
 
 def do_fit_and_score(dsk, est, X_train, y_train, X_test, y_test, n_splits,
@@ -351,7 +436,6 @@ def do_fit_feature_union(dsk, est, X, y, n_splits, fit_params, error_score):
 # CV splitting #
 # ------------ #
 
-
 def check_cv(cv=3, y=None, classifier=False):
     """Dask aware version of ``sklearn.model_selection.check_cv``
 
@@ -491,7 +575,7 @@ class DefaultSplitter(object):
         (X_train, y_train,
          X_test, y_test) = _do_extract_splits(dsk, X_name, y_name, train_name,
                                               test_name, n_splits, is_pairwise)
-        return dsk, X_train, y_train, X_test, y_test, n_splits
+        return dsk, n_splits, X_name, y_name, X_train, y_train, X_test, y_test
 
 
 @splitter.register(_BaseKFold)
