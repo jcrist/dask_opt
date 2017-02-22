@@ -1,11 +1,10 @@
 import copy
 
-import numpy as np
 import dask.array as da
 from dask.base import Base, tokenize
 from dask.delayed import delayed, Delayed
 
-from sklearn.utils.validation import indexable, _num_samples
+from sklearn.utils.validation import indexable
 
 
 def _indexable(x):
@@ -43,28 +42,15 @@ def to_keys(dsk, *args):
             yield key
 
 
-def unique(x):
-    """The number of unique element in x"""
-    if not isinstance(x, Base):
-        return np.unique(x)
-
-    if isinstance(x, da.Array):
-        return da.unique(x).compute()
-
-    return delayed(np.unique, pure=True)(x).compute()
-
-
-def num_samples(x):
-    """The number of samples in x"""
-    if not isinstance(x, Base) or isinstance(x, da.Array):
-        return _num_samples(x)
-
-    return delayed(_num_samples, pure=True)(x).compute()
-
-
 def copy_estimator(est):
     # Semantically, we'd like to use `sklearn.clone` here instead. However,
     # `sklearn.clone` isn't threadsafe, so we don't want to call it in
     # tasks.  Since `est` is guaranteed to not be a fit estimator, we can
     # use `copy.deepcopy` here without fear of copying large data.
     return copy.deepcopy(est)
+
+
+def unzip(itbl, n):
+    if itbl:
+        return zip(*itbl)
+    return [()] * n

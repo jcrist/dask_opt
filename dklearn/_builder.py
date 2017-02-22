@@ -7,11 +7,9 @@ from collections import defaultdict
 
 import numpy as np
 from scipy import sparse
-from scipy.misc import comb
 
 from dask.delayed import delayed
 from dask.base import Base, tokenize
-from dask.utils import Dispatch
 
 from sklearn.base import is_classifier, clone
 from sklearn.exceptions import FitFailedWarning
@@ -34,7 +32,7 @@ from sklearn.utils.validation import _num_samples, check_consistent_length
 
 from .normalize import normalize_estimator
 
-from .utils import unique, num_samples, to_keys, copy_estimator, to_indexable
+from .utils import to_keys, copy_estimator, to_indexable, unzip
 
 
 # A singleton to indicate a failed estimator fit
@@ -165,11 +163,11 @@ def _store(results, key_name, array, n_splits, n_candidates,
 def create_cv_results(output, candidate_params, n_splits, error_score,
                       iid, return_train_score):
     if return_train_score:
-        train_scores, test_scores, test_sample_counts = zip(*output)
+        train_scores, test_scores, test_sample_counts = unzip(output, 3)
         train_scores = [error_score if s is FIT_FAILURE else s
                         for s in train_scores]
     else:
-        test_scores, test_sample_counts = zip(*output)
+        test_scores, test_sample_counts = unzip(output, 2)
 
     test_scores = [error_score if s is FIT_FAILURE else s for s in test_scores]
     # Construct the `cv_results_` dictionary
@@ -226,7 +224,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     (dsk, n_splits,
      X_name, y_name,
      X_train, y_train,
-     X_test, y_test) = splitter(cv).build_graph(X, y, groups, is_pairwise)
+     X_test, y_test) = initialize_graph(cv, X, y, groups, is_pairwise)
 
     scores = []
     for parameters in candidate_params:
@@ -457,17 +455,43 @@ def check_cv(cv=3, y=None, classifier=False):
     return KFold(cv)
 
 
-def _do_extract_splits(dsk, X_name, y_name, train_name, test_name,
-                       n_splits, is_pairwise):
-    token = tokenize(X_name, y_name, train_name, test_name, n_splits,
-                     is_pairwise)
+def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False):
+    """Initialize the CV dask graph.
+
+    Given input data X, y, and groups, build up a dask graph performing the
+    initial CV splits.
+
+    Parameters
+    ----------
+    cv : BaseCrossValidator
+    X, y, groups : array_like, dask object, or None
+    is_pairwise : bool
+        Whether the estimator being evaluated has ``_pairwise`` as an
+        attribute (which affects how the CV splitting is done).
+    """
+    dsk = {}
+    X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
+    n_splits = compute_n_splits(cv, X, y, groups)
+
+    cv_token = tokenize(cv, X_name, y_name, groups_name)
+    cv_name = 'cv-split-' + cv_token
+    train_name = 'cv-split-train-' + cv_token
+    test_name = 'cv-split-test-' + cv_token
+
+    dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name)
+
+    for n in range(n_splits):
+        dsk[(cv_name, n)] = (getitem, cv_name, n)
+        dsk[(train_name, n)] = (getitem, (cv_name, n), 0)
+        dsk[(test_name, n)] = (getitem, (cv_name, n), 1)
+
     # Extract the test-train subsets
-    Xy_train = 'Xy-train-' + token
-    X_train = 'X-train-' + token
-    y_train = 'y-train-' + token
-    Xy_test = 'Xy-test-' + token
-    X_test = 'X-test-' + token
-    y_test = 'y-test-' + token
+    Xy_train = 'Xy-train-' + cv_token
+    X_train = 'X-train-' + cv_token
+    y_train = 'y-train-' + cv_token
+    Xy_test = 'Xy-test-' + cv_token
+    X_test = 'X-test-' + cv_token
+    y_test = 'y-test-' + cv_token
 
     # Build a helper function to insert the extract tasks
     if is_pairwise:
@@ -493,142 +517,41 @@ def _do_extract_splits(dsk, X_name, y_name, train_name, test_name,
         dsk[(X_test, n)] = (getitem, (Xy_test, n), 0)
         dsk[(y_test, n)] = (getitem, (Xy_test, n), 1)
 
-    return X_train, y_train, X_test, y_test
+    return dsk, n_splits, X_name, y_name, X_train, y_train, X_test, y_test
 
 
-splitter = Dispatch()
+def compute_n_splits(cv, X, y, groups):
+    """Return the number of splits.
 
+    Parameters
+    ----------
+    cv : BaseCrossValidator
+    X, y, groups : array_like, dask object, or None
 
-@splitter.register(object)
-class DefaultSplitter(object):
-    """Default wrapper for a scikit-learn CV object.
-
-    Splitter classes wrap the scikit-learn CV objects, and are used to
-    instantiate the dask graph for a CV run.
+    Returns
+    -------
+    n_splits : int
     """
-    def __init__(self, cv):
-        self.cv = cv
+    if isinstance(cv, (_BaseKFold, BaseShuffleSplit)):
+        return cv.n_splits
 
-    def _compute_n_splits(self, X, y, groups):
-        """Return the number of splits.
+    elif isinstance(cv, PredefinedSplit):
+        return len(cv.unique_folds)
 
-        Parameters
-        ----------
-        X, y, groups : array_like, dask object, or None
+    elif isinstance(cv, _CVIterableWrapper):
+        return len(cv.cv)
 
-        Returns
-        -------
-        n_splits : int
-        """
-        if (isinstance(X, Base) or isinstance(y, Base) or
-                isinstance(groups, Base)):
-            return delayed(self.cv).get_n_splits(X, y, groups).compute()
-        return self.cv.get_n_splits(X, y, groups)
+    elif isinstance(cv, (LeaveOneOut, LeavePOut)) and not isinstance(X, Base):
+        # Only `X` is referenced for these classes
+        return cv.get_n_splits(X, None, None)
 
-    def _split_train_test(self, dsk, X_name, y_name, groups_name, n_splits):
-        """Build the graph for generating the train/test indices.
+    elif (isinstance(cv, (LeaveOneGroupOut, LeavePGroupsOut)) and not
+          isinstance(groups, Base)):
+        # Only `groups` is referenced for these classes
+        return cv.get_n_splits(None, None, groups)
 
-        Parameters
-        ----------
-        dsk : dask graph
-        X_name, y_name, groups_name : str or None
-            The key names for X, y, and groups (if present).
-        n_splits : int
-            The number of splits
+    elif not any(isinstance(i, Base) for i in (X, y, groups)):
+        return cv.get_n_splits(X, y, groups)
 
-        Returns
-        -------
-        train_name, test_name : str
-            The key prefixes for the train/test indices.
-        """
-        cv_token = tokenize(self.cv, X_name, y_name, groups_name)
-        cv_name = 'cv-split-' + cv_token
-        train_name = 'cv-split-train-' + cv_token
-        test_name = 'cv-split-test-' + cv_token
-
-        dsk[cv_name] = (cv_split, self.cv, X_name, y_name, groups_name)
-        for n in range(n_splits):
-            dsk[(cv_name, n)] = (getitem, cv_name, n)
-            dsk[(train_name, n)] = (getitem, (cv_name, n), 0)
-            dsk[(test_name, n)] = (getitem, (cv_name, n), 1)
-        return train_name, test_name
-
-    def build_graph(self, X, y=None, groups=None, is_pairwise=False):
-        """Initialize the CV dask graph.
-
-        Given input data X, y, and groups, build up a dask graph performing the
-        initial CV splits.
-
-        Parameters
-        ----------
-        X, y, groups : array_like, dask object, or None
-        is_pairwise : bool
-            Whether the estimator being evaluated has ``_pairwise`` as an
-            attribute (which affects how the CV splitting is done).
-        """
-        n_splits = self._compute_n_splits(X, y, groups)
-        # Build the graph
-        dsk = {}
-        X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
-        train_name, test_name = self._split_train_test(dsk, X_name, y_name,
-                                                       groups_name, n_splits)
-        (X_train, y_train,
-         X_test, y_test) = _do_extract_splits(dsk, X_name, y_name, train_name,
-                                              test_name, n_splits, is_pairwise)
-        return dsk, n_splits, X_name, y_name, X_train, y_train, X_test, y_test
-
-
-@splitter.register(_BaseKFold)
-class KFoldSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        return self.cv.n_splits
-
-
-@splitter.register(BaseShuffleSplit)
-class ShuffleSplitSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        return self.cv.n_splits
-
-
-@splitter.register(LeaveOneOut)
-class LeaveOneOutSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        if isinstance(X, Base):
-            return num_samples(X)
-        return self.cv.get_n_splits(X, y, groups)
-
-
-@splitter.register(LeavePOut)
-class LeavePOutSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        if isinstance(X, Base):
-            return int(comb(num_samples(X), self.cv.p, exact=True))
-        return self.cv.get_n_splits(X, y, groups)
-
-
-@splitter.register(LeaveOneGroupOut)
-class LeaveOneGroupOutSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        if isinstance(X, Base):
-            return len(unique(groups))
-        return self.cv.get_n_splits(X, y, groups)
-
-
-@splitter.register(LeavePGroupsOut)
-class LeavePGroupsOutSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        if isinstance(X, Base):
-            return int(comb(len(unique(groups)), self.cv.n_groups, exact=True))
-        return self.cv.get_n_splits(X, y, groups)
-
-
-@splitter.register(PredefinedSplit)
-class PredefinedSplitSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        return len(self.cv.unique_folds)
-
-
-@splitter.register(_CVIterableWrapper)
-class IterableSplitter(DefaultSplitter):
-    def _compute_n_splits(self, X, y, groups):
-        return len(self.cv.cv)
+    else:
+        return delayed(cv).get_n_splits(X, y, groups).compute()
