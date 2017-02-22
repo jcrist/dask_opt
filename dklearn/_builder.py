@@ -443,7 +443,7 @@ def check_cv(cv=3, y=None, classifier=False):
 
     # If ``cv`` is not an integer, the scikit-learn implementation doesn't
     # touch the ``y`` object, so passing on a dask object is fine
-    if not (isinstance(y, Base) and isinstance(cv, numbers.Integral)):
+    if not isinstance(y, Base) or not isinstance(cv, numbers.Integral):
         return _sklearn_check_cv(cv, y, classifier)
 
     if classifier:
@@ -519,7 +519,7 @@ def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False):
     return dsk, n_splits, X_name, y_name, X_train, y_train, X_test, y_test
 
 
-def compute_n_splits(cv, X, y, groups):
+def compute_n_splits(cv, X, y=None, groups=None):
     """Return the number of splits.
 
     Parameters
@@ -531,6 +531,9 @@ def compute_n_splits(cv, X, y, groups):
     -------
     n_splits : int
     """
+    if not any(isinstance(i, Base) for i in (X, y, groups)):
+        return cv.get_n_splits(X, y, groups)
+
     if isinstance(cv, (_BaseKFold, BaseShuffleSplit)):
         return cv.n_splits
 
@@ -548,9 +551,6 @@ def compute_n_splits(cv, X, y, groups):
           isinstance(groups, Base)):
         # Only `groups` is referenced for these classes
         return cv.get_n_splits(None, None, groups)
-
-    elif not any(isinstance(i, Base) for i in (X, y, groups)):
-        return cv.get_n_splits(X, y, groups)
 
     else:
         return delayed(cv).get_n_splits(X, y, groups).compute()
