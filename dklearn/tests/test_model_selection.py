@@ -262,11 +262,18 @@ def test_pipeline_feature_union():
 
     pca = PCA(random_state=0)
     kbest = SelectKBest()
+    empty_union = FeatureUnion([('first', None), ('second', None)])
+    empty_pipeline = Pipeline([('first', None), ('second', None)])
     svc = SVC(kernel='linear', random_state=0)
 
-    pipe = Pipeline([("union", FeatureUnion([("pca", pca), ('kbest', kbest)],
+    pipe = Pipeline([('empty_pipeline', empty_pipeline),
+                     ('missing', None),
+                     ('union', FeatureUnion([('pca', pca),
+                                             ('missing', None),
+                                             ('kbest', kbest),
+                                             ('empty_union', empty_union)],
                                             transformer_weights={'pca': 0.5})),
-                     ("svc", svc)])
+                     ('svc', svc)])
 
     param_grid = dict(union__pca__n_components=[1, 2, 3],
                       union__kbest__k=[1, 2],
@@ -286,8 +293,8 @@ def test_pipeline_feature_union():
     np.testing.assert_allclose(sk_pca.components_, dk_pca.components_)
 
     # Check SelectKBest scores match
-    sk_kbest = gs.best_estimator_.named_steps['union'].transformer_list[1][1]
-    dk_kbest = dgs.best_estimator_.named_steps['union'].transformer_list[1][1]
+    sk_kbest = gs.best_estimator_.named_steps['union'].transformer_list[2][1]
+    dk_kbest = dgs.best_estimator_.named_steps['union'].transformer_list[2][1]
     np.testing.assert_allclose(sk_kbest.scores_, dk_kbest.scores_)
 
     # Check SVC coefs match
