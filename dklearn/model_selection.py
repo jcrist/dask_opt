@@ -108,7 +108,23 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                              % self.best_estimator_)
         return self.scorer_(self.best_estimator_, X, y)
 
-    def _fit(self, X, y=None, groups=None, **fit_params):
+    def fit(self, X, y=None, groups=None, **fit_params):
+        """Run fit with all sets of parameters.
+
+        Parameters
+        ----------
+        X : array-like, shape = [n_samples, n_features]
+            Training vector, where n_samples is the number of samples and
+            n_features is the number of features.
+        y : array-like, shape = [n_samples] or [n_samples, n_output], optional
+            Target relative to X for classification or regression;
+            None for unsupervised learning.
+        groups : array-like, shape = [n_samples], optional
+            Group labels for the samples used while splitting the dataset into
+            train/test set.
+        **fit_params
+            Parameters passed to the ``fit`` method of the estimator
+        """
         estimator = self.estimator
         self.scorer_ = check_scoring(estimator, scoring=self.scoring)
         error_score = self.error_score
@@ -124,18 +140,14 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                                           refit=self.refit,
                                           error_score=error_score,
                                           return_train_score=self.return_train_score)
-        # Store the graph
         self.dask_graph_ = dsk
+        self.n_splits_ = n_splits
 
-        # Compute the scores
         get = self.get or dask.context._globals.get('get') or threaded_get
         out = get(dsk, keys)
 
-        results = out[0]
-
+        self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
-        self.cv_results_ = results
-        self.n_splits_ = n_splits
 
         if self.refit:
             self.best_estimator_ = out[1]
@@ -183,10 +195,6 @@ class DaskGridSearchCV(DaskBaseSearchCV):
         """Return ParameterGrid instance for the given param_grid"""
         return model_selection.ParameterGrid(self.param_grid)
 
-    @derived_from(model_selection.GridSearchCV)
-    def fit(self, X, y=None, groups=None, **fit_params):
-        return self._fit(X, y=y, groups=groups, **fit_params)
-
 
 class DaskRandomizedSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_distributions, n_iter=10, scoring=None,
@@ -205,7 +213,3 @@ class DaskRandomizedSearchCV(DaskBaseSearchCV):
         """Return ParameterSampler instance for the given distributions"""
         return model_selection.ParameterSampler(self.param_distributions,
                 self.n_iter, random_state=self.random_state)
-
-    @derived_from(model_selection.RandomizedSearchCV)
-    def fit(self, X, y=None, groups=None, **fit_params):
-        return self._fit(X, y=y, groups=groups, **fit_params)
