@@ -19,6 +19,9 @@ from sklearn.utils.validation import check_is_fitted
 from ._builder import build_graph
 
 
+__all__ = ['DaskGridSearchCV', 'DaskRandomizedSearchCV']
+
+
 class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     """Base class for hyper parameter search with cross-validation."""
 

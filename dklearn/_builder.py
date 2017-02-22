@@ -30,9 +30,8 @@ from sklearn.utils.fixes import rankdata, MaskedArray
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import _num_samples, check_consistent_length
 
-from .normalize import normalize_estimator
-
-from .utils import to_keys, copy_estimator, to_indexable, unzip
+from ._normalize import normalize_estimator
+from .utils import to_indexable, to_keys, copy_estimator, unzip
 
 
 # A singleton to indicate a failed estimator fit
