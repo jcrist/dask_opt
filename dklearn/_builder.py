@@ -26,7 +26,7 @@ from sklearn.model_selection._split import (_BaseKFold,
                                             _CVIterableWrapper)
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
-from sklearn.utils.fixes import rankdata, MaskedArray
+from sklearn.utils.fixes import rankdata
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import (_num_samples, check_consistent_length,
                                       _is_arraylike)
@@ -189,9 +189,9 @@ def create_cv_results(output, candidate_params, n_splits, error_score,
     # Use one MaskedArray and mask all the places where the param is not
     # applicable for that candidate. Use defaultdict as each candidate may
     # not contain all the params
-    param_results = defaultdict(lambda: MaskedArray(np.empty(n_candidates),
-                                                    mask=True,
-                                                    dtype=object))
+    param_results = defaultdict(lambda: np.ma.MaskedArray(np.empty(n_candidates),
+                                                          mask=True,
+                                                          dtype=object))
     for cand_i, params in enumerate(candidate_params):
         for name, value in params.items():
             param_results["param_%s" % name][cand_i] = value
