@@ -23,7 +23,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.utils.multiclass import type_of_target
 
 from .methods import (fit, fit_transform, pipeline, fit_best, get_best_params,
-                      create_cv_results, cv_split, cv_extract,
+                      create_cv_results, cv_split, cv_n_samples, cv_extract,
                       cv_extract_pairwise, score, MISSING)
 from ._normalize import normalize_estimator
 
@@ -54,7 +54,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     (dsk, n_splits,
      X_name, y_name,
      X_train, y_train,
-     X_test, y_test) = initialize_graph(cv, X, y, groups, is_pairwise)
+     X_test, y_test, weights) = initialize_graph(cv, X, y, groups, is_pairwise)
 
     fields, tokens, params = normalize_params(candidate_params)
 
@@ -94,7 +94,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
 
     cv_results = 'cv-results-' + main_token
     dsk[cv_results] = (create_cv_results, test_scores, train_scores,
-                       candidate_params, n_splits, error_score, iid)
+                       candidate_params, n_splits, error_score, weights)
     keys = [cv_results]
 
     if refit:
@@ -209,7 +209,7 @@ def do_fit_transform(dsk, next_token, est, fields, tokens, params, Xs, ys,
 
 
 def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
-                 is_transform):
+                 n_splits, error_score, is_transform):
     if 'steps' in fields:
         raise NotImplementedError("Setting Pipeline.steps in a gridsearch")
 
@@ -219,7 +219,7 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
     for f in fields:
         if '__' in f:
             step, param = f.split('__', 1)
-            step_fields_lk[step].append((f, field_to_index[f]))
+            step_fields_lk[step].append((param, field_to_index[f]))
         elif f not in step_fields_lk:
             raise ValueError("Unknown parameter: `%s`" % f)
 
@@ -262,15 +262,17 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
                         sub_tokens = sub_params = None
 
                     if transform:
-                        sub_Xs, sub_fits = do_fit_transform(dsk, sub_est,
+                        sub_Xs, sub_fits = do_fit_transform(dsk, next_token, sub_est,
                                                             sub_fields, sub_tokens,
                                                             sub_params, sub_Xs,
-                                                            sub_ys)
+                                                            sub_ys, n_splits,
+                                                            error_score)
                         new_Xs.update(zip(ids, sub_Xs))
                         new_fits.update(zip(ids, sub_fits))
                     else:
-                        sub_fits = do_fit(dsk, sub_est, sub_fields, sub_tokens,
-                                          sub_params, sub_Xs, sub_ys)
+                        sub_fits = do_fit(dsk, next_token, sub_est, sub_fields,
+                                          sub_tokens, sub_params, sub_Xs,
+                                          sub_ys, n_splits, error_score)
                         new_fits.update(zip(ids, sub_fits))
             # Extract lists of transformed Xs and fit steps
             all_ids = list(range(len(Xs)))
@@ -289,11 +291,12 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
                 sub_tokens = sub_params = None
 
             if transform:
-                Xs, fits = do_fit_transform(dsk, step, sub_fields, sub_tokens,
-                                            sub_params, Xs, ys)
+                fits, Xs = do_fit_transform(dsk, next_token, step, sub_fields,
+                                            sub_tokens, sub_params, Xs, ys,
+                                            n_splits, error_score)
             else:
-                fits = do_fit(dsk, step, sub_fields, sub_tokens, sub_params,
-                              Xs, ys)
+                fits = do_fit(dsk, next_token, step, sub_fields, sub_tokens,
+                              sub_params, Xs, ys, n_splits, error_score)
         fit_steps.append(fits)
 
     # Rebuild the pipelines
@@ -301,16 +304,19 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
     out_ests = []
     out_ests_append = out_ests.append
     name = 'pipeline-' + next_token(est)
-    n = 0
+    m = 0
     seen = {}
     for steps in zip(*fit_steps):
         if steps in seen:
             out_ests_append(seen[steps])
         else:
-            dsk[(name, n)] = (pipeline, step_names, list(steps))
-            seen[steps] = (name, n)
-            out_ests_append((name, n))
-            n += 1
+            for n in range(n_splits):
+                dsk[(name, m, n)] = (pipeline, step_names,
+                                     [None if s is None else s + (n,)
+                                      for s in steps])
+            seen[steps] = (name, m)
+            out_ests_append((name, m))
+            m += 1
 
     if is_transform:
         return out_ests, Xs
@@ -342,7 +348,7 @@ def check_cv(cv=3, y=None, classifier=False):
     return KFold(cv)
 
 
-def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False):
+def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False, iid=True):
     """Initialize the CV dask graph.
 
     Given input data X, y, and groups, build up a dask graph performing the
@@ -366,6 +372,12 @@ def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False):
     test_name = 'cv-split-test-' + cv_token
 
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name)
+
+    if iid:
+        weights = 'cv-n-samples-' + cv_token
+        dsk[weights] = (cv_n_samples, cv_name)
+    else:
+        weights = None
 
     for n in range(n_splits):
         dsk[(cv_name, n)] = (getitem, cv_name, n)
@@ -407,7 +419,8 @@ def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False):
     return (dsk, n_splits,
             X_name, y_name,
             X_train, y_train,
-            X_test, y_test)
+            X_test, y_test,
+            weights)
 
 
 def compute_n_splits(cv, X, y=None, groups=None):

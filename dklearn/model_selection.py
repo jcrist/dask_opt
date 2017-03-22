@@ -142,15 +142,15 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
-        #get = self.get or dask.context._globals.get('get') or threaded_get
-        #out = get(dsk, keys)
+        get = self.get or dask.context._globals.get('get') or threaded_get
+        out = get(dsk, keys)
 
-        #self.cv_results_ = results = out[0]
-        #self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
+        self.cv_results_ = results = out[0]
+        self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
 
-        #if self.refit:
-            #self.best_estimator_ = out[1]
-        #return self
+        if self.refit:
+            self.best_estimator_ = out[1]
+        return self
 
     def visualize(self, filename='mydask', format=None, **kwargs):
         """Render the task graph for this parameter search using ``graphviz``.

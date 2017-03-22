@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 import warnings
 from collections import defaultdict
+from threading import Lock
 
 import numpy as np
 from scipy import sparse
@@ -44,6 +45,10 @@ def warn_fit_failure(error_score, e):
 def cv_split(cv, X, y, groups):
     check_consistent_length(X, y, groups)
     return list(cv.split(X, y, groups))
+
+
+def cv_n_samples(cvs):
+    return np.array([len(inds[1]) for inds in cvs])
 
 
 def cv_extract(X, y, ind):
@@ -94,13 +99,20 @@ def feature_union_concat(Xs, weights):
     return np.hstack(Xs)
 
 
+# Current set_params isn't threadsafe
+SET_PARAMS_LOCK = Lock()
+
+
 def set_params(est, fields=None, params=None, copy=True):
     if copy:
         est = copy_estimator(est)
     if fields is None:
         return est
     params = {f: p for (f, p) in zip(fields, params) if p is not MISSING}
-    return est.set_params(**params)
+    # TODO: rewrite set_params to avoid lock for classes that use the standard
+    # set_params/get_params methods
+    with SET_PARAMS_LOCK:
+        return est.set_params(**params)
 
 
 def fit(est, X, y, error_score='raise', fields=None, params=None):
@@ -162,8 +174,8 @@ def _store(results, key_name, array, n_splits, n_candidates,
             rankdata(-array_means, method='min'), dtype=np.int32)
 
 
-def create_cv_results(output, test_scores, train_scores, candidate_params, n_splits,
-                      error_score, iid):
+def create_cv_results(test_scores, train_scores, candidate_params, n_splits,
+                      error_score, weights):
     test_scores = [error_score if s is FIT_FAILURE else s for s in test_scores]
     if train_scores is not None:
         train_scores = [error_score if s is FIT_FAILURE else s
@@ -172,11 +184,9 @@ def create_cv_results(output, test_scores, train_scores, candidate_params, n_spl
     # Construct the `cv_results_` dictionary
     results = {'params': candidate_params}
     n_candidates = len(candidate_params)
-    test_sample_counts = np.array(test_sample_counts[:n_splits], dtype=int)
 
     _store(results, 'test_score', test_scores, n_splits, n_candidates,
-           splits=True, rank=True,
-           weights=test_sample_counts if iid else None)
+           splits=True, rank=True, weights=weights)
     if train_scores is not None:
         _store(results, 'train_score', train_scores,
                n_splits, n_candidates, splits=True)
