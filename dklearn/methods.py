@@ -48,7 +48,7 @@ def cv_split(cv, X, y, groups):
 
 
 def cv_n_samples(cvs):
-    return np.array([len(inds[1]) for inds in cvs])
+    return np.array([inds[1].sum() for inds in cvs])
 
 
 def cv_extract(X, y, ind):
@@ -184,6 +184,10 @@ def create_cv_results(test_scores, train_scores, candidate_params, n_splits,
     # Construct the `cv_results_` dictionary
     results = {'params': candidate_params}
     n_candidates = len(candidate_params)
+
+    if weights is not None:
+        weights = np.broadcast_to(weights[None, :],
+                                  (len(candidate_params), len(weights)))
 
     _store(results, 'test_score', test_scores, n_splits, n_candidates,
            splits=True, rank=True, weights=weights)

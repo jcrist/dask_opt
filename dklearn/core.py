@@ -54,7 +54,8 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     (dsk, n_splits,
      X_name, y_name,
      X_train, y_train,
-     X_test, y_test, weights) = initialize_graph(cv, X, y, groups, is_pairwise)
+     X_test, y_test, weights) = initialize_graph(cv, X, y, groups, is_pairwise,
+                                                 iid)
 
     fields, tokens, params = normalize_params(candidate_params)
 
