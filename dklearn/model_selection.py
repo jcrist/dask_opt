@@ -16,7 +16,7 @@ from sklearn.metrics.scorer import check_scoring
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils.validation import check_is_fitted
 
-from ._builder import build_graph
+from .core import build_graph
 
 
 __all__ = ['DaskGridSearchCV', 'DaskRandomizedSearchCV']
@@ -135,7 +135,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
                                           list(self._get_param_iterator()),
                                           X, y, groups,
-                                          fit_params=fit_params,
                                           iid=self.iid,
                                           refit=self.refit,
                                           error_score=error_score,
@@ -143,15 +142,15 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
-        get = self.get or dask.context._globals.get('get') or threaded_get
-        out = get(dsk, keys)
+        #get = self.get or dask.context._globals.get('get') or threaded_get
+        #out = get(dsk, keys)
 
-        self.cv_results_ = results = out[0]
-        self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
+        #self.cv_results_ = results = out[0]
+        #self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
 
-        if self.refit:
-            self.best_estimator_ = out[1]
-        return self
+        #if self.refit:
+            #self.best_estimator_ = out[1]
+        #return self
 
     def visualize(self, filename='mydask', format=None, **kwargs):
         """Render the task graph for this parameter search using ``graphviz``.

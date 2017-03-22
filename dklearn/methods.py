@@ -5,6 +5,7 @@ from collections import defaultdict
 
 import numpy as np
 from scipy import sparse
+from dask.base import normalize_token
 
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
@@ -12,13 +13,14 @@ from sklearn.utils import safe_indexing
 from sklearn.utils.fixes import rankdata, MaskedArray
 from sklearn.utils.validation import check_consistent_length, _is_arraylike
 
-from .utils import copy_estimator, unzip
+from .utils import copy_estimator
 
 # A singleton to indicate a missing parameter
 MISSING = type('MissingParameter', (object,),
                {'__slots__': (),
                 '__reduce__': lambda self: 'MISSING',
                 '__doc__': "A singleton to indicate a missing parameter"})()
+normalize_token.register(type(MISSING), lambda x: 'MISSING')
 
 
 # A singleton to indicate a failed estimator fit
@@ -101,12 +103,12 @@ def set_params(est, fields=None, params=None, copy=True):
     return est.set_params(**params)
 
 
-def fit(est, X, y, fit_params, error_score='raise', fields=None, params=None):
+def fit(est, X, y, error_score='raise', fields=None, params=None):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE
     try:
         est = set_params(est, fields, params)
-        est.fit(X, y, **fit_params)
+        est.fit(X, y)
     except Exception as e:
         if error_score == 'raise':
             raise
@@ -115,16 +117,15 @@ def fit(est, X, y, fit_params, error_score='raise', fields=None, params=None):
     return est
 
 
-def fit_transform(est, X, y, fit_params, error_score='raise',
-                  fields=None, params=None):
+def fit_transform(est, X, y, error_score='raise', fields=None, params=None):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE, FIT_FAILURE
     try:
         est = set_params(est, fields, params)
         if hasattr(est, 'fit_transform'):
-            Xt = est.fit_transform(X, y, **fit_params)
+            Xt = est.fit_transform(X, y)
         else:
-            est.fit(X, y, **fit_params)
+            est.fit(X, y)
             Xt = est.transform(X)
     except Exception as e:
         if error_score == 'raise':
@@ -161,16 +162,13 @@ def _store(results, key_name, array, n_splits, n_candidates,
             rankdata(-array_means, method='min'), dtype=np.int32)
 
 
-def create_cv_results(output, candidate_params, n_splits, error_score,
-                      iid, return_train_score):
-    if return_train_score:
-        train_scores, test_scores, test_sample_counts = unzip(output, 3)
+def create_cv_results(output, test_scores, train_scores, candidate_params, n_splits,
+                      error_score, iid):
+    test_scores = [error_score if s is FIT_FAILURE else s for s in test_scores]
+    if train_scores is not None:
         train_scores = [error_score if s is FIT_FAILURE else s
                         for s in train_scores]
-    else:
-        test_scores, test_sample_counts = unzip(output, 2)
 
-    test_scores = [error_score if s is FIT_FAILURE else s for s in test_scores]
     # Construct the `cv_results_` dictionary
     results = {'params': candidate_params}
     n_candidates = len(candidate_params)
@@ -179,7 +177,7 @@ def create_cv_results(output, candidate_params, n_splits, error_score,
     _store(results, 'test_score', test_scores, n_splits, n_candidates,
            splits=True, rank=True,
            weights=test_sample_counts if iid else None)
-    if return_train_score:
+    if train_scores is not None:
         _store(results, 'train_score', train_scores,
                n_splits, n_candidates, splits=True)
 
@@ -202,7 +200,7 @@ def get_best_params(candidate_params, cv_results):
     return candidate_params[best_index]
 
 
-def fit_best(estimator, params, X, y, fit_params):
+def fit_best(estimator, params, X, y):
     estimator = copy_estimator(estimator).set_params(**params)
-    estimator.fit(X, y, **fit_params)
+    estimator.fit(X, y)
     return estimator
