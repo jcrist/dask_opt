@@ -137,7 +137,10 @@ def do_fit(dsk, next_token, est, fields, tokens, params, Xs, ys, n_splits,
                             Xs, ys, n_splits, error_score, False)
     else:
         token = next_token(est)
-        fit_name = '%s-fit-%s' % (type(est).__name__.lower(), token)
+        est_type = type(est).__name__.lower()
+        est_name = '%s-%s' % (est_type, token)
+        fit_name = '%s-fit-%s' % (est_type, token)
+        dsk[est_name] = est
         seen = {}
         m = 0
         out = []
@@ -148,7 +151,7 @@ def do_fit(dsk, next_token, est, fields, tokens, params, Xs, ys, n_splits,
                     out_append(seen[X, y])
                 else:
                     for n in range(n_splits):
-                        dsk[(fit_name, m, n)] = (fit, est,
+                        dsk[(fit_name, m, n)] = (fit, est_name,
                                                  X + (n,), y + (n,),
                                                  error_score)
                     seen[(X, y)] = (fit_name, m)
@@ -160,8 +163,9 @@ def do_fit(dsk, next_token, est, fields, tokens, params, Xs, ys, n_splits,
                     out_append(seen[X, y, t])
                 else:
                     for n in range(n_splits):
-                        dsk[(fit_name, m, n)] = (fit, est, X + (n,), y + (n,),
-                                                 error_score, fields, p)
+                        dsk[(fit_name, m, n)] = (fit, est_name, X + (n,),
+                                                 y + (n,), error_score,
+                                                 fields, p)
                     seen[(X, y, t)] = (fit_name, m)
                     out_append((fit_name, m))
                     m += 1
@@ -179,6 +183,8 @@ def do_fit_transform(dsk, next_token, est, fields, tokens, params, Xs, ys,
         fit_Xt_name = '%s-fit-transform-%s' % (name, token)
         fit_name = '%s-fit-%s' % (name, token)
         Xt_name = '%s-transform-%s' % (name, token)
+        est_name = '%s-%s' % (type(est).__name__.lower(), token)
+        dsk[est_name] = est
         seen = {}
         m = 0
         out = []
@@ -189,7 +195,7 @@ def do_fit_transform(dsk, next_token, est, fields, tokens, params, Xs, ys,
                     out_append(seen[X, y])
                 else:
                     for n in range(n_splits):
-                        dsk[(fit_Xt_name, m, n)] = (fit_transform, est,
+                        dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
                                                     X + (n,), y + (n,),
                                                     error_score)
                         dsk[(fit_name, m, n)] = (getitem, (fit_Xt_name, m, n), 0)
@@ -203,7 +209,7 @@ def do_fit_transform(dsk, next_token, est, fields, tokens, params, Xs, ys,
                     out_append(seen[X, y, t])
                 else:
                     for n in range(n_splits):
-                        dsk[(fit_Xt_name, m, n)] = (fit_transform, est,
+                        dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
                                                     X + (n,), y + (n,),
                                                     error_score, fields, p)
                         dsk[(fit_name, m, n)] = (getitem, (fit_Xt_name, m, n), 0)
