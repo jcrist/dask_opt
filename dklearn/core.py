@@ -4,7 +4,6 @@ from operator import getitem
 from collections import defaultdict
 import numbers
 
-from cytoolz import get, pluck
 from dask.base import tokenize, Base
 from dask.delayed import delayed
 from sklearn.base import is_classifier, clone
@@ -28,6 +27,12 @@ from .methods import (fit, fit_transform, pipeline, fit_best, get_best_params,
 from ._normalize import normalize_estimator
 
 from .utils import to_indexable, to_keys, unzip
+
+
+try:
+    from cytoolz import get, pluck
+except:
+    from toolz import get, pluck
 
 
 class TokenIterator(object):
