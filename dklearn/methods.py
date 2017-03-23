@@ -5,6 +5,7 @@ from collections import defaultdict
 from threading import Lock
 
 import numpy as np
+from toolz import pluck
 from scipy import sparse
 from dask.base import normalize_token
 
@@ -53,7 +54,8 @@ def cv_split(cv, X, y, groups):
 
 
 def cv_n_samples(cvs):
-    return np.array([inds[1].sum() for inds in cvs])
+    return np.array([i.sum() if i.dtype == bool else len(i)
+                     for i in pluck(1, cvs)])
 
 
 def cv_extract(X, y, ind):
