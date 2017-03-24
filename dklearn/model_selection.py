@@ -26,7 +26,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     """Base class for hyper parameter search with cross-validation."""
 
     def __init__(self, estimator, scoring=None, iid=True, refit=True, cv=None,
-                 error_score='raise', return_train_score=True, get=None):
+                 error_score='raise', return_train_score=True, cache_cv=True,
+                 get=None):
         self.scoring = scoring
         self.estimator = estimator
         self.iid = iid
@@ -34,6 +35,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.cv = cv
         self.error_score = error_score
         self.return_train_score = return_train_score
+        self.cache_cv = cache_cv
         self.get = get
 
     @property
@@ -138,7 +140,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                                           iid=self.iid,
                                           refit=self.refit,
                                           error_score=error_score,
-                                          return_train_score=self.return_train_score)
+                                          return_train_score=self.return_train_score,
+                                          cache_cv=self.cache_cv)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 

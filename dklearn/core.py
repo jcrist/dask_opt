@@ -23,7 +23,7 @@ from sklearn.utils.multiclass import type_of_target
 
 from .methods import (fit, fit_transform, pipeline, fit_best, get_best_params,
                       create_cv_results, cv_split, cv_n_samples, cv_extract,
-                      cv_extract_pairwise, score, MISSING)
+                      score, MISSING)
 from ._normalize import normalize_estimator
 
 from .utils import to_indexable, to_keys, unzip
@@ -49,58 +49,66 @@ class TokenIterator(object):
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, iid=True, refit=True,
-                error_score='raise', return_train_score=True):
+                error_score='raise', return_train_score=True, cache_cv=True):
 
     X, y, groups = to_indexable(X, y, groups)
     cv = check_cv(cv, y, is_classifier(estimator))
     # "pairwise" estimators require a different graph for CV splitting
     is_pairwise = getattr(estimator, '_pairwise', False)
 
-    (dsk, n_splits,
-     X_name, y_name,
-     X_train, y_train,
-     X_test, y_test, weights) = initialize_graph(cv, X, y, groups, is_pairwise,
-                                                 iid)
+    dsk = {}
+    X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
+    n_splits = compute_n_splits(cv, X, y, groups)
 
     fields, tokens, params = normalize_params(candidate_params)
-
-    # Token used for all fit and score steps in the graph.
     main_token = tokenize(normalize_estimator(estimator), fields, params,
-                          X_train, y_train, X_test, y_test,
-                          error_score == 'raise', return_train_score)
+                          X_name, y_name, cv, error_score == 'raise',
+                          return_train_score)
+
+    cv_name = 'cv-split-' + main_token
+    dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
+                    is_pairwise, cache_cv)
+
+    if iid:
+        weights = 'cv-n-samples-' + main_token
+        dsk[weights] = (cv_n_samples, cv_name)
+    else:
+        weights = None
+
+    X_train = (cv_extract, cv_name, X_name, y_name, True, True)
+    X_test = (cv_extract, cv_name, X_name, y_name, True, False)
+    y_train = (cv_extract, cv_name, X_name, y_name, False, True)
+    y_test = (cv_extract, cv_name, X_name, y_name, False, False)
 
     # Fit the estimator on the training data
-    X_trains = [(X_train,)] * len(params)
-    y_trains = [(y_train,)] * len(params)
+    X_trains = [X_train] * len(params)
+    y_trains = [y_train] * len(params)
     fit_ests = do_fit(dsk, TokenIterator(main_token), estimator,
                       fields, tokens, params,
                       X_trains, y_trains, n_splits, error_score)
 
-    test_score = 'test-score-' + main_token
+    score_name = 'score-' + main_token
 
-    test_scores = []
-    test_scores_append = test_scores.append
-    for (name, m) in fit_ests:
-        for n in range(n_splits):
-            dsk[(test_score, m, n)] = (score, (name, m, n), (X_test, n),
-                                       (y_test, n), scorer)
-            test_scores_append((test_score, m, n))
+    scores = []
+    scores_append = scores.append
+    for n in range(n_splits):
+        if return_train_score:
+            xtrain = X_train + (n,)
+            ytrain = y_train + (n,)
+        else:
+            xtrain = ytrain = None
 
-    if return_train_score:
-        train_score = 'train-score-' + main_token
-        train_scores = []
-        train_scores_append = train_scores.append
+        xtest = X_test + (n,)
+        ytest = y_test + (n,)
+
         for (name, m) in fit_ests:
-            for n in range(n_splits):
-                dsk[(train_score, m, n)] = (score, (name, m, n), (X_train, n),
-                                            (y_train, n), scorer)
-                train_scores_append((train_score, m, n))
-    else:
-        train_scores = None
+            dsk[(score_name, m, n)] = (score, (name, m, n),
+                                       xtest, ytest, xtrain, ytrain, scorer)
+            scores_append((score_name, m, n))
 
     cv_results = 'cv-results-' + main_token
-    dsk[cv_results] = (create_cv_results, test_scores, train_scores,
-                       candidate_params, n_splits, error_score, weights)
+    dsk[cv_results] = (create_cv_results, scores, candidate_params, n_splits,
+                       error_score, weights)
     keys = [cv_results]
 
     if refit:
@@ -248,10 +256,19 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
             new_fits = {}
             new_Xs = {}
             est_index = field_to_index[step_name]
-            id_groups = defaultdict(lambda: [].append)
+
+            id_groups = []
+
+            def new_group():
+                o = []
+                id_groups.append(o)
+                return o.append
+
+            _id_groups = defaultdict(new_group)
             for n, step_token in enumerate(pluck(est_index, tokens)):
-                id_groups[step_token](n)
-            for ids in (i.__self__ for i in id_groups.values()):
+                _id_groups[step_token](n)
+
+            for ids in id_groups:
                 # Get the estimator for this subgroup
                 sub_est = params[ids[0]][est_index]
                 if sub_est is MISSING:
@@ -358,81 +375,6 @@ def check_cv(cv=3, y=None, classifier=False):
         if target_type in ('binary', 'multiclass'):
             return StratifiedKFold(cv)
     return KFold(cv)
-
-
-def initialize_graph(cv, X, y=None, groups=None, is_pairwise=False, iid=True):
-    """Initialize the CV dask graph.
-
-    Given input data X, y, and groups, build up a dask graph performing the
-    initial CV splits.
-
-    Parameters
-    ----------
-    cv : BaseCrossValidator
-    X, y, groups : array_like, dask object, or None
-    is_pairwise : bool
-        Whether the estimator being evaluated has ``_pairwise`` as an
-        attribute (which affects how the CV splitting is done).
-    """
-    dsk = {}
-    X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
-    n_splits = compute_n_splits(cv, X, y, groups)
-
-    cv_token = tokenize(cv, X_name, y_name, groups_name, is_pairwise)
-    cv_name = 'cv-split-' + cv_token
-    train_name = 'cv-split-train-' + cv_token
-    test_name = 'cv-split-test-' + cv_token
-
-    dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name)
-
-    if iid:
-        weights = 'cv-n-samples-' + cv_token
-        dsk[weights] = (cv_n_samples, cv_name)
-    else:
-        weights = None
-
-    for n in range(n_splits):
-        dsk[(cv_name, n)] = (getitem, cv_name, n)
-        dsk[(train_name, n)] = (getitem, (cv_name, n), 0)
-        dsk[(test_name, n)] = (getitem, (cv_name, n), 1)
-
-    # Extract the test-train subsets
-    Xy_train = 'Xy-train-' + cv_token
-    X_train = 'X-train-' + cv_token
-    y_train = 'y-train-' + cv_token
-    Xy_test = 'Xy-test-' + cv_token
-    X_test = 'X-test-' + cv_token
-    y_test = 'y-test-' + cv_token
-
-    # Build a helper function to insert the extract tasks
-    if is_pairwise:
-        def extract_train(X, y, train, test):
-            return (cv_extract_pairwise, X, y, train, train)
-
-        def extract_test(X, y, train, test):
-            return (cv_extract_pairwise, X, y, test, train)
-    else:
-        def extract_train(X, y, train, test):
-            return (cv_extract, X, y, train)
-
-        def extract_test(X, y, train, test):
-            return (cv_extract, X, y, test)
-
-    for n in range(n_splits):
-        dsk[(Xy_train, n)] = extract_train(X_name, y_name, (train_name, n),
-                                           (test_name, n))
-        dsk[(X_train, n)] = (getitem, (Xy_train, n), 0)
-        dsk[(y_train, n)] = (getitem, (Xy_train, n), 1)
-        dsk[(Xy_test, n)] = extract_test(X_name, y_name, (train_name, n),
-                                         (test_name, n))
-        dsk[(X_test, n)] = (getitem, (Xy_test, n), 0)
-        dsk[(y_test, n)] = (getitem, (Xy_test, n), 1)
-
-    return (dsk, n_splits,
-            X_name, y_name,
-            X_train, y_train,
-            X_test, y_test,
-            weights)
 
 
 def compute_n_splits(cv, X, y=None, groups=None):

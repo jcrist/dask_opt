@@ -48,29 +48,67 @@ def warn_fit_failure(error_score, e):
 # ----------------------- #
 
 
-def cv_split(cv, X, y, groups):
+class CVCache(object):
+    def __init__(self, splits, pairwise=False, cache=True):
+        self.splits = splits
+        self.pairwise = pairwise
+        self.cache = {} if cache else None
+
+    def __reduce__(self):
+        return (CVCache, (self.splits, self.pairwise, self.cache is not None))
+
+    def num_test_samples(self):
+        return np.array([i.sum() if i.dtype == bool else len(i)
+                         for i in pluck(1, self.splits)])
+
+    def extract(self, X, y, n, is_x=True, is_train=True):
+        if is_x:
+            if self.pairwise:
+                return self._extract_pairwise(X, y, n, is_train=is_train)
+            return self._extract(X, y, n, is_x=True, is_train=is_train)
+        if y is None:
+            return None
+        return self._extract(X, y, n, is_x=False, is_train=is_train)
+
+    def _extract(self, X, y, n, is_x=True, is_train=True):
+        if self.cache is not None and (n, is_x, is_train) in self.cache:
+            return self.cache[n, is_x, is_train]
+
+        inds = self.splits[n][0] if is_train else self.splits[n][1]
+        result = safe_indexing(X if is_x else y, inds)
+
+        if self.cache is not None:
+            self.cache[n, is_x, is_train] = result
+        return result
+
+    def _extract_pairwise(self, X, y, n, is_train=True):
+        if self.cache is not None and (n, True, is_train) in self.cache:
+            return self.cache[n, True, is_train]
+
+        if not hasattr(X, "shape"):
+            raise ValueError("Precomputed kernels or affinity matrices have "
+                            "to be passed as arrays or sparse matrices.")
+        if X.shape[0] != X.shape[1]:
+            raise ValueError("X should be a square kernel matrix")
+        train, test = self.splits[n]
+        result = X[np.ix_(train if is_train else test, train)]
+
+        if self.cache is not None:
+            self.cache[n, True, is_train] = result
+        return result
+
+
+def cv_split(cv, X, y, groups, is_pairwise, cache):
     check_consistent_length(X, y, groups)
-    return list(cv.split(X, y, groups))
+    return CVCache(list(cv.split(X, y, groups)), is_pairwise, cache)
 
 
 def cv_n_samples(cvs):
-    return np.array([i.sum() if i.dtype == bool else len(i)
-                     for i in pluck(1, cvs)])
+    return cvs.num_test_samples()
 
 
-def cv_extract(X, y, ind):
-    return (safe_indexing(X, ind),
-            None if y is None else safe_indexing(y, ind))
-
-
-def cv_extract_pairwise(X, y, ind1, ind2):
-    if not hasattr(X, "shape"):
-        raise ValueError("Precomputed kernels or affinity matrices have "
-                        "to be passed as arrays or sparse matrices.")
-    if X.shape[0] != X.shape[1]:
-        raise ValueError("X should be a square kernel matrix")
-    return (X[np.ix_(ind1, ind2)],
-            None if y is None else safe_indexing(y, ind1))
+def cv_extract(cvs, X, y, is_X, is_train, n):
+    return cvs.extract(X, y, n, is_X, is_train)
 
 
 def cv_extract_param(x, indices):
@@ -154,17 +192,25 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None):
     return est, Xt
 
 
-def score(est, X, y, scorer):
+def _score(est, X, y, scorer):
     if est is FIT_FAILURE:
         return FIT_FAILURE
     return scorer(est, X) if y is None else scorer(est, X, y)
 
 
+def score(est, X_test, y_test, X_train, y_train, scorer):
+    test_score = _score(est, X_test, y_test, scorer)
+    if X_train is None:
+        return test_score
+    train_score = _score(est, X_train, y_train, scorer)
+    return test_score, train_score
+
+
 def _store(results, key_name, array, n_splits, n_candidates,
            weights=None, splits=False, rank=False):
     """A small helper to store the scores/times to the cv_results_"""
-    # When iterated first by parameters then by splits
-    array = np.array(array, dtype=np.float64).reshape(n_candidates, n_splits)
+    # When iterated first by n_splits and then by parameters
+    array = np.array(array, dtype=np.float64).reshape(n_splits, n_candidates).T
     if splits:
         for split_i in range(n_splits):
             results["split%d_%s" % (split_i, key_name)] = array[:, split_i]
@@ -181,8 +227,13 @@ def _store(results, key_name, array, n_splits, n_candidates,
             rankdata(-array_means, method='min'), dtype=np.int32)
 
 
-def create_cv_results(test_scores, train_scores, candidate_params, n_splits,
-                      error_score, weights):
+def create_cv_results(scores, candidate_params, n_splits, error_score, weights):
+    if isinstance(scores[0], tuple):
+        test_scores, train_scores = zip(*scores)
+    else:
+        test_scores = scores
+        train_scores = None
+
     test_scores = [error_score if s is FIT_FAILURE else s for s in test_scores]
     if train_scores is not None:
         train_scores = [error_score if s is FIT_FAILURE else s
