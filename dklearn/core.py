@@ -32,7 +32,7 @@ from .utils import to_indexable, to_keys, unzip
 
 try:
     from cytoolz import get, pluck
-except:
+except:  # pragma: no cover
     from toolz import get, pluck
 
 
@@ -63,8 +63,9 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
 
     if fit_params:
         # A mapping of {name: (name, graph-key)}
+        param_values = to_indexable(*fit_params.values(), allow_scalars=True)
         fit_params = {k: (k, v) for (k, v) in
-                      zip(fit_params, to_keys(dsk, *fit_params.values()))}
+                      zip(fit_params, to_keys(dsk, *param_values))}
     else:
         fit_params = {}
 
@@ -261,8 +262,10 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     for f in fields:
         if '__' in f:
             step, param = f.split('__', 1)
-            step_fields_lk[step].append((param, field_to_index[f]))
-        elif f not in step_fields_lk:
+            if step in step_fields_lk:
+                step_fields_lk[step].append((param, field_to_index[f]))
+                continue
+        if f not in step_fields_lk:
             raise ValueError("Unknown parameter: `%s`" % f)
 
     fit_params_lk = _group_fit_params(est.steps, fit_params)
@@ -317,7 +320,7 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                         sub_tokens = sub_params = None
 
                     if transform:
-                        sub_Xs, sub_fits = do_fit_transform(dsk, next_token,
+                        sub_fits, sub_Xs = do_fit_transform(dsk, next_token,
                                                             sub_est, cv, sub_fields,
                                                             sub_tokens, sub_params,
                                                             sub_Xs, sub_ys,

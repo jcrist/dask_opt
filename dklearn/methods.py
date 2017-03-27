@@ -19,7 +19,7 @@ from .utils import copy_estimator
 
 try:
     from sklearn.utils.fixes import MaskedArray
-except:
+except:  # pragma: no cover
     from numpy.ma import MaskedArray
 
 # A singleton to indicate a missing parameter
@@ -170,7 +170,8 @@ def set_params(est, fields=None, params=None, copy=True):
         return est.set_params(**params)
 
 
-def fit(est, X, y, error_score='raise', fields=None, params=None, fit_params=None):
+def fit(est, X, y, error_score='raise', fields=None, params=None,
+        fit_params=None):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE
     if not fit_params:

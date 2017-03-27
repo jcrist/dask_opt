@@ -43,6 +43,17 @@ class MockClassifier(object):
         return self
 
 
+class IdentityTransformer(BaseEstimator):
+    def __init__(self, dummy=None):
+        self.dummy = dummy
+
+    def fit(self, X, y):
+        return self
+
+    def transform(self, X):
+        return X
+
+
 class FailingClassifier(BaseEstimator):
     """Classifier that raises a ValueError on fit()"""
 

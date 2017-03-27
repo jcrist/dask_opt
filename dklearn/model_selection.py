@@ -184,11 +184,11 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 class DaskGridSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_grid, scoring=None, iid=True,
                  refit=True, cv=None, error_score='raise',
-                 return_train_score=True, get=None):
+                 return_train_score=True, get=None, cache_cv=True):
         super(DaskGridSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
-                get=get)
+                get=get, cache_cv=cache_cv)
 
         _check_param_grid(param_grid)
         self.param_grid = param_grid
@@ -201,11 +201,12 @@ class DaskGridSearchCV(DaskBaseSearchCV):
 class DaskRandomizedSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_distributions, n_iter=10, scoring=None,
                  iid=True, refit=True, cv=None, random_state=None,
-                 error_score='raise', return_train_score=True, get=None):
+                 error_score='raise', return_train_score=True, get=None,
+                 cache_cv=True):
         super(DaskRandomizedSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
-                get=get)
+                get=get, cache_cv=cache_cv)
 
         self.param_distributions = param_distributions
         self.n_iter = n_iter
