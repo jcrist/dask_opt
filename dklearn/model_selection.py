@@ -136,7 +136,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
                                           list(self._get_param_iterator()),
-                                          X, y, groups,
+                                          X, y, groups, fit_params,
                                           iid=self.iid,
                                           refit=self.refit,
                                           error_score=error_score,

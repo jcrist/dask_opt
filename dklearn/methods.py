@@ -70,6 +70,16 @@ class CVCache(object):
             return None
         return self._extract(X, y, n, is_x=False, is_train=is_train)
 
+    def extract_param(self, key, x, n):
+        if self.cache is not None and (n, key) in self.cache:
+            return self.cache[n, key]
+
+        out = safe_indexing(x, self.splits[n][0]) if _is_arraylike(x) else x
+
+        if self.cache is not None:
+            self.cache[n, key] = out
+        return out
+
     def _extract(self, X, y, n, is_x=True, is_train=True):
         if self.cache is not None and (n, is_x, is_train) in self.cache:
             return self.cache[n, is_x, is_train]
@@ -111,8 +121,8 @@ def cv_extract(cvs, X, y, is_X, is_train, n):
     return cvs.extract(X, y, n, is_X, is_train)
 
 
-def cv_extract_param(x, indices):
-    return safe_indexing(x, indices) if _is_arraylike(x) else x
+def cv_extract_params(cvs, keys, vals, n):
+    return {k: cvs.extract_param(tok, v, n) for (k, tok), v in zip(keys, vals)}
 
 
 def pipeline(names, steps):
@@ -160,12 +170,14 @@ def set_params(est, fields=None, params=None, copy=True):
         return est.set_params(**params)
 
 
-def fit(est, X, y, error_score='raise', fields=None, params=None):
+def fit(est, X, y, error_score='raise', fields=None, params=None, fit_params=None):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE
+    if not fit_params:
+        fit_params = {}
     try:
         est = set_params(est, fields, params)
-        est.fit(X, y)
+        est.fit(X, y, **fit_params)
     except Exception as e:
         if error_score == 'raise':
             raise
@@ -174,15 +186,18 @@ def fit(est, X, y, error_score='raise', fields=None, params=None):
     return est
 
 
-def fit_transform(est, X, y, error_score='raise', fields=None, params=None):
+def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
+                  fit_params=None):
     if est is FIT_FAILURE or X is FIT_FAILURE:
         return FIT_FAILURE, FIT_FAILURE
+    if not fit_params:
+        fit_params = {}
     try:
         est = set_params(est, fields, params)
         if hasattr(est, 'fit_transform'):
-            Xt = est.fit_transform(X, y)
+            Xt = est.fit_transform(X, y, **fit_params)
         else:
-            est.fit(X, y)
+            est.fit(X, y, **fit_params)
             Xt = est.transform(X)
     except Exception as e:
         if error_score == 'raise':
@@ -272,7 +287,7 @@ def get_best_params(candidate_params, cv_results):
     return candidate_params[best_index]
 
 
-def fit_best(estimator, params, X, y):
+def fit_best(estimator, params, X, y, fit_params):
     estimator = copy_estimator(estimator).set_params(**params)
-    estimator.fit(X, y)
+    estimator.fit(X, y, **fit_params)
     return estimator

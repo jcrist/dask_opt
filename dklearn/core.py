@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 from operator import getitem
 from collections import defaultdict
+from itertools import repeat
 import numbers
 
 from dask.base import tokenize, Base
@@ -23,7 +24,7 @@ from sklearn.utils.multiclass import type_of_target
 
 from .methods import (fit, fit_transform, pipeline, fit_best, get_best_params,
                       create_cv_results, cv_split, cv_n_samples, cv_extract,
-                      score, MISSING)
+                      cv_extract_params, score, MISSING)
 from ._normalize import normalize_estimator
 
 from .utils import to_indexable, to_keys, unzip
@@ -48,7 +49,7 @@ class TokenIterator(object):
 
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
-                groups=None, iid=True, refit=True,
+                groups=None, fit_params=None, iid=True, refit=True,
                 error_score='raise', return_train_score=True, cache_cv=True):
 
     X, y, groups = to_indexable(X, y, groups)
@@ -60,10 +61,17 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
     n_splits = compute_n_splits(cv, X, y, groups)
 
+    if fit_params:
+        # A mapping of {name: (name, graph-key)}
+        fit_params = {k: (k, v) for (k, v) in
+                      zip(fit_params, to_keys(dsk, *fit_params.values()))}
+    else:
+        fit_params = {}
+
     fields, tokens, params = normalize_params(candidate_params)
     main_token = tokenize(normalize_estimator(estimator), fields, params,
-                          X_name, y_name, cv, error_score == 'raise',
-                          return_train_score)
+                          X_name, y_name, groups_name, fit_params, cv,
+                          error_score == 'raise', return_train_score)
 
     cv_name = 'cv-split-' + main_token
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
@@ -83,9 +91,9 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     # Fit the estimator on the training data
     X_trains = [X_train] * len(params)
     y_trains = [y_train] * len(params)
-    fit_ests = do_fit(dsk, TokenIterator(main_token), estimator,
-                      fields, tokens, params,
-                      X_trains, y_trains, n_splits, error_score)
+    fit_ests = do_fit(dsk, TokenIterator(main_token), estimator, cv_name,
+                      fields, tokens, params, X_trains, y_trains,
+                      fit_params, n_splits, error_score)
 
     score_name = 'score-' + main_token
 
@@ -115,8 +123,11 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
         best_params = 'best-params-' + main_token
         dsk[best_params] = (get_best_params, candidate_params, cv_results)
         best_estimator = 'best-estimator-' + main_token
+        if fit_params:
+            fit_params = (dict, (zip, list(fit_params.keys()),
+                                list(pluck(1, fit_params.values()))))
         dsk[best_estimator] = (fit_best, clone(estimator), best_params,
-                               X_name, y_name)
+                               X_name, y_name, fit_params)
         keys.append(best_estimator)
 
     return dsk, keys, n_splits
@@ -138,54 +149,76 @@ def normalize_params(params):
     return fields, tokens, params2
 
 
-def do_fit(dsk, next_token, est, fields, tokens, params, Xs, ys, n_splits,
-           error_score):
+def _get_fit_params(cv, fit_params, n_splits):
+    if not fit_params:
+        return [(n, None) for n in range(n_splits)]
+    keys = []
+    vals = []
+    for name, (full_name, val) in fit_params.items():
+        vals.append(val)
+        keys.append((name, full_name))
+    return [(n, (cv_extract_params, cv, keys, vals, n))
+            for n in range(n_splits)]
+
+
+def _group_fit_params(steps, fit_params):
+    param_lk = {n: {} for n, _ in steps}
+    for pname, pval in fit_params.items():
+        step, param = pname.split('__', 1)
+        param_lk[step][param] = pval
+    return param_lk
+
+
+def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
+           fit_params, n_splits, error_score):
     if isinstance(est, Pipeline) and params is not None:
-        return _do_pipeline(dsk, next_token, est, fields, tokens, params,
-                            Xs, ys, n_splits, error_score, False)
+        return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
+                            Xs, ys, fit_params, n_splits, error_score, False)
     else:
+        n_and_fit_params = _get_fit_params(cv, fit_params, n_splits)
+
+        if params is None:
+            params = tokens = repeat(None)
+            fields = None
+
         token = next_token(est)
         est_type = type(est).__name__.lower()
         est_name = '%s-%s' % (est_type, token)
         fit_name = '%s-fit-%s' % (est_type, token)
         dsk[est_name] = est
+
         seen = {}
         m = 0
         out = []
         out_append = out.append
-        if params is None:
-            for X, y in zip(Xs, ys):
-                if (X, y) in seen:
-                    out_append(seen[X, y])
-                else:
-                    for n in range(n_splits):
-                        dsk[(fit_name, m, n)] = (fit, est_name,
-                                                 X + (n,), y + (n,),
-                                                 error_score)
-                    seen[(X, y)] = (fit_name, m)
-                    out_append((fit_name, m))
-                    m += 1
-        else:
-            for X, y, t, p in zip(Xs, ys, tokens, params):
-                if (X, y, t) in seen:
-                    out_append(seen[X, y, t])
-                else:
-                    for n in range(n_splits):
-                        dsk[(fit_name, m, n)] = (fit, est_name, X + (n,),
-                                                 y + (n,), error_score,
-                                                 fields, p)
-                    seen[(X, y, t)] = (fit_name, m)
-                    out_append((fit_name, m))
-                    m += 1
+
+        for X, y, t, p in zip(Xs, ys, tokens, params):
+            if (X, y, t) in seen:
+                out_append(seen[X, y, t])
+            else:
+                for n, fit_params in n_and_fit_params:
+                    dsk[(fit_name, m, n)] = (fit, est_name, X + (n,),
+                                             y + (n,), error_score,
+                                             fields, p, fit_params)
+                seen[(X, y, t)] = (fit_name, m)
+                out_append((fit_name, m))
+                m += 1
+
         return out
 
 
-def do_fit_transform(dsk, next_token, est, fields, tokens, params, Xs, ys,
-                     n_splits, error_score):
+def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
+                     fit_params, n_splits, error_score):
     if isinstance(est, Pipeline) and params is not None:
-        return _do_pipeline(dsk, next_token, est, fields, tokens, params,
-                            Xs, ys, n_splits, error_score, True)
+        return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
+                            Xs, ys, fit_params, n_splits, error_score, True)
     else:
+        n_and_fit_params = _get_fit_params(cv, fit_params, n_splits)
+
+        if params is None:
+            params = tokens = repeat(None)
+            fields = None
+
         name = type(est).__name__.lower()
         token = next_token(est)
         fit_Xt_name = '%s-fit-transform-%s' % (name, token)
@@ -193,43 +226,32 @@ def do_fit_transform(dsk, next_token, est, fields, tokens, params, Xs, ys,
         Xt_name = '%s-transform-%s' % (name, token)
         est_name = '%s-%s' % (type(est).__name__.lower(), token)
         dsk[est_name] = est
+
         seen = {}
         m = 0
         out = []
         out_append = out.append
-        if params is None:
-            for X, y in zip(Xs, ys):
-                if (X, y) in seen:
-                    out_append(seen[X, y])
-                else:
-                    for n in range(n_splits):
-                        dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
-                                                    X + (n,), y + (n,),
-                                                    error_score)
-                        dsk[(fit_name, m, n)] = (getitem, (fit_Xt_name, m, n), 0)
-                        dsk[(Xt_name, m, n)] = (getitem, (fit_Xt_name, m, n), 1)
-                    seen[(X, y)] = m
-                    out_append(m)
-                    m += 1
-        else:
-            for X, y, t, p in zip(Xs, ys, tokens, params):
-                if (X, y, t) in seen:
-                    out_append(seen[X, y, t])
-                else:
-                    for n in range(n_splits):
-                        dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
-                                                    X + (n,), y + (n,),
-                                                    error_score, fields, p)
-                        dsk[(fit_name, m, n)] = (getitem, (fit_Xt_name, m, n), 0)
-                        dsk[(Xt_name, m, n)] = (getitem, (fit_Xt_name, m, n), 1)
-                    seen[X, y, t] = m
-                    out_append(m)
-                    m += 1
+
+        for X, y, t, p in zip(Xs, ys, tokens, params):
+            if (X, y, t) in seen:
+                out_append(seen[X, y, t])
+            else:
+                for n, fit_params in n_and_fit_params:
+                    dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
+                                                X + (n,), y + (n,),
+                                                error_score, fields, p,
+                                                fit_params)
+                    dsk[(fit_name, m, n)] = (getitem, (fit_Xt_name, m, n), 0)
+                    dsk[(Xt_name, m, n)] = (getitem, (fit_Xt_name, m, n), 1)
+                seen[X, y, t] = m
+                out_append(m)
+                m += 1
+
         return [(fit_name, i) for i in out], [(Xt_name, i) for i in out]
 
 
-def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
-                 n_splits, error_score, is_transform):
+def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
+                 fit_params, n_splits, error_score, is_transform):
     if 'steps' in fields:
         raise NotImplementedError("Setting Pipeline.steps in a gridsearch")
 
@@ -243,6 +265,8 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
         elif f not in step_fields_lk:
             raise ValueError("Unknown parameter: `%s`" % f)
 
+    fit_params_lk = _group_fit_params(est.steps, fit_params)
+
     # A list of (step, is_transform)
     instrs = [(s, True) for s in est.steps[:-1]]
     instrs.append((est.steps[-1], is_transform))
@@ -250,6 +274,8 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
     fit_steps = []
     for (step_name, step), transform in instrs:
         sub_fields, sub_inds = map(list, unzip(step_fields_lk[step_name], 2))
+
+        sub_fit_params = fit_params_lk[step_name]
 
         if step_name in field_to_index:
             # The estimator may change each call
@@ -291,17 +317,19 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
                         sub_tokens = sub_params = None
 
                     if transform:
-                        sub_Xs, sub_fits = do_fit_transform(dsk, next_token, sub_est,
-                                                            sub_fields, sub_tokens,
-                                                            sub_params, sub_Xs,
-                                                            sub_ys, n_splits,
-                                                            error_score)
+                        sub_Xs, sub_fits = do_fit_transform(dsk, next_token,
+                                                            sub_est, cv, sub_fields,
+                                                            sub_tokens, sub_params,
+                                                            sub_Xs, sub_ys,
+                                                            sub_fit_params,
+                                                            n_splits, error_score)
                         new_Xs.update(zip(ids, sub_Xs))
                         new_fits.update(zip(ids, sub_fits))
                     else:
-                        sub_fits = do_fit(dsk, next_token, sub_est, sub_fields,
-                                          sub_tokens, sub_params, sub_Xs,
-                                          sub_ys, n_splits, error_score)
+                        sub_fits = do_fit(dsk, next_token, sub_est, cv,
+                                          sub_fields, sub_tokens, sub_params,
+                                          sub_Xs, sub_ys, sub_fit_params,
+                                          n_splits, error_score)
                         new_fits.update(zip(ids, sub_fits))
             # Extract lists of transformed Xs and fit steps
             all_ids = list(range(len(Xs)))
@@ -320,12 +348,14 @@ def _do_pipeline(dsk, next_token, est, fields, tokens, params, Xs, ys,
                 sub_tokens = sub_params = None
 
             if transform:
-                fits, Xs = do_fit_transform(dsk, next_token, step, sub_fields,
-                                            sub_tokens, sub_params, Xs, ys,
-                                            n_splits, error_score)
+                fits, Xs = do_fit_transform(dsk, next_token, step, cv,
+                                            sub_fields, sub_tokens, sub_params,
+                                            Xs, ys, sub_fit_params, n_splits,
+                                            error_score)
             else:
-                fits = do_fit(dsk, next_token, step, sub_fields, sub_tokens,
-                              sub_params, Xs, ys, n_splits, error_score)
+                fits = do_fit(dsk, next_token, step, cv, sub_fields,
+                              sub_tokens, sub_params, Xs, ys, sub_fit_params,
+                              n_splits, error_score)
         fit_steps.append(fits)
 
     # Rebuild the pipelines
