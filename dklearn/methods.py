@@ -227,6 +227,19 @@ def score(est, X_test, y_test, X_train, y_train, scorer):
     return test_score, train_score
 
 
+def fit_and_score(est, cv, X, y, n, scorer,
+                  error_score='raise', fields=None, params=None,
+                  fit_params=None, return_train_score=True):
+    X_train = cv.extract(X, y, n, True, True)
+    y_train = cv.extract(X, y, n, False, True)
+    X_test = cv.extract(X, y, n, True, False)
+    y_test = cv.extract(X, y, n, False, False)
+    est = fit(est, X_train, y_train, error_score, fields, params, fit_params)
+    if not return_train_score:
+        X_train = y_train = None
+    return score(est, X_test, y_test, X_train, y_train, scorer)
+
+
 def _store(results, key_name, array, n_splits, n_candidates,
            weights=None, splits=False, rank=False):
     """A small helper to store the scores/times to the cv_results_"""
