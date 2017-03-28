@@ -24,7 +24,7 @@ from sklearn.utils.multiclass import type_of_target
 
 from .methods import (fit, fit_transform, pipeline, fit_best, get_best_params,
                       create_cv_results, cv_split, cv_n_samples, cv_extract,
-                      cv_extract_params, score, MISSING)
+                      cv_extract_params, decompress_params, score, MISSING)
 from ._normalize import normalize_estimator
 
 from .utils import to_indexable, to_keys, unzip
@@ -116,13 +116,15 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
             scores_append((score_name, m, n))
 
     cv_results = 'cv-results-' + main_token
-    dsk[cv_results] = (create_cv_results, scores, candidate_params, n_splits,
-                       error_score, weights)
+    candidate_params_name = 'cv-parameters-' + main_token
+    dsk[candidate_params_name] = (decompress_params, fields, params)
+    dsk[cv_results] = (create_cv_results, scores, candidate_params_name,
+                       n_splits, error_score, weights)
     keys = [cv_results]
 
     if refit:
         best_params = 'best-params-' + main_token
-        dsk[best_params] = (get_best_params, candidate_params, cv_results)
+        dsk[best_params] = (get_best_params, candidate_params_name, cv_results)
         best_estimator = 'best-estimator-' + main_token
         if fit_params:
             fit_params = (dict, (zip, list(fit_params.keys()),

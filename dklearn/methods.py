@@ -125,6 +125,11 @@ def cv_extract_params(cvs, keys, vals, n):
     return {k: cvs.extract_param(tok, v, n) for (k, tok), v in zip(keys, vals)}
 
 
+def decompress_params(fields, params):
+    return [{k: v for k, v in zip(fields, p) if v is not MISSING}
+            for p in params]
+
+
 def pipeline(names, steps):
     """Reconstruct a Pipeline from names and steps"""
     if any(s is FIT_FAILURE for s in steps):
