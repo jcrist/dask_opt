@@ -31,10 +31,10 @@ from sklearn.svm import LinearSVC, SVC
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from sklearn.utils.fixes import in1d
 
+from dklearn import DaskGridSearchCV, DaskRandomizedSearchCV
 from dklearn.utils_test import (FailingClassifier, MockClassifier,
                                 CheckingClassifier, MockDataFrame,
                                 ignore_warnings)
-from dklearn import DaskGridSearchCV, DaskRandomizedSearchCV
 
 
 class LinearSVCNoScore(LinearSVC):

@@ -37,7 +37,7 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.svm import SVC
 
 from dklearn import DaskGridSearchCV
-from dklearn.core import compute_n_splits, check_cv
+from dklearn.model_selection import compute_n_splits, check_cv
 from dklearn.methods import CVCache
 from dklearn.utils_test import (FailingClassifier, MockClassifier,
                                 ScalingTransformer, CheckXClassifier,
