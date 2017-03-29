@@ -45,7 +45,7 @@ except:  # pragma: no cover
     from toolz import get, pluck
 
 
-__all__ = ['DaskGridSearchCV', 'DaskRandomizedSearchCV']
+__all__ = ['GridSearchCV', 'RandomizedSearchCV']
 
 
 class TokenIterator(object):
@@ -775,11 +775,11 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                               format=format, **kwargs)
 
 
-class DaskGridSearchCV(DaskBaseSearchCV):
+class GridSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_grid, scoring=None, iid=True,
                  refit=True, cv=None, error_score='raise',
                  return_train_score=True, get=None, cache_cv=True):
-        super(DaskGridSearchCV, self).__init__(estimator=estimator,
+        super(GridSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
                 get=get, cache_cv=cache_cv)
@@ -792,12 +792,12 @@ class DaskGridSearchCV(DaskBaseSearchCV):
         return model_selection.ParameterGrid(self.param_grid)
 
 
-class DaskRandomizedSearchCV(DaskBaseSearchCV):
+class RandomizedSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_distributions, n_iter=10, scoring=None,
                  iid=True, refit=True, cv=None, random_state=None,
                  error_score='raise', return_train_score=True, get=None,
                  cache_cv=True):
-        super(DaskRandomizedSearchCV, self).__init__(estimator=estimator,
+        super(RandomizedSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
                 get=get, cache_cv=cache_cv)
