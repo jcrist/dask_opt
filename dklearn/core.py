@@ -551,7 +551,7 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                     weights = est.transformer_weights
                 lk = weights or {}
                 weight_list = [lk.get(n) for n in step_names]
-            weight_lk[tok] = (weights, weight_list)
+                weight_lk[tok] = (weights, weight_list)
         weights = get(weight_tokens, weight_lk)
     else:
         lk = est.transformer_weights or {}
