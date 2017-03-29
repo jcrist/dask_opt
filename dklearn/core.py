@@ -313,6 +313,104 @@ def _group_subparams(steps, fields, ignore=()):
     return field_to_index, step_fields_lk
 
 
+def _group_ids_by_index(index, tokens):
+    id_groups = []
+
+    def new_group():
+        o = []
+        id_groups.append(o)
+        return o.append
+
+    _id_groups = defaultdict(new_group)
+    for n, t in enumerate(pluck(index, tokens)):
+        _id_groups[t](n)
+    return id_groups
+
+
+def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
+                 fit_params, n_splits, error_score, step_fields_lk,
+                 fit_params_lk, field_to_index, step_name, none_passthrough,
+                 is_transform):
+    sub_fields, sub_inds = map(list, unzip(step_fields_lk[step_name], 2))
+    sub_fit_params = fit_params_lk[step_name]
+
+    if step_name in field_to_index:
+        # The estimator may change each call
+        new_fits = {}
+        new_Xs = {}
+        est_index = field_to_index[step_name]
+
+        for ids in _group_ids_by_index(est_index, tokens):
+            # Get the estimator for this subgroup
+            sub_est = params[ids[0]][est_index]
+            if sub_est is MISSING:
+                sub_est = step
+
+            # If an estimator is `None`, there's nothing to do
+            if sub_est is None:
+                nones = dict.fromkeys(ids, None)
+                new_fits.update(nones)
+                if is_transform:
+                    if none_passthrough:
+                        new_Xs.update(zip(ids, get(ids, Xs)))
+                    else:
+                        new_Xs.update(nones)
+            else:
+                # Extract the proper subset of Xs, ys
+                sub_Xs = get(ids, Xs)
+                sub_ys = get(ids, ys)
+                # Only subset the parameters/tokens if necessary
+                if sub_fields:
+                    sub_tokens = list(pluck(sub_inds, get(ids, tokens)))
+                    sub_params = list(pluck(sub_inds, get(ids, params)))
+                else:
+                    sub_tokens = sub_params = None
+
+                if is_transform:
+                    sub_fits, sub_Xs = do_fit_transform(dsk, next_token,
+                                                        sub_est, cv, sub_fields,
+                                                        sub_tokens, sub_params,
+                                                        sub_Xs, sub_ys,
+                                                        sub_fit_params,
+                                                        n_splits, error_score)
+                    new_Xs.update(zip(ids, sub_Xs))
+                    new_fits.update(zip(ids, sub_fits))
+                else:
+                    sub_fits = do_fit(dsk, next_token, sub_est, cv,
+                                        sub_fields, sub_tokens, sub_params,
+                                        sub_Xs, sub_ys, sub_fit_params,
+                                        n_splits, error_score)
+                    new_fits.update(zip(ids, sub_fits))
+        # Extract lists of transformed Xs and fit steps
+        all_ids = list(range(len(Xs)))
+        if is_transform:
+            Xs = get(all_ids, new_Xs)
+        fits = get(all_ids, new_fits)
+    elif step is None:
+        # Nothing to do
+        fits = [None] * len(Xs)
+        if not none_passthrough:
+            Xs = fits
+    else:
+        # Only subset the parameters/tokens if necessary
+        if sub_fields:
+            sub_tokens = list(pluck(sub_inds, tokens))
+            sub_params = list(pluck(sub_inds, params))
+        else:
+            sub_tokens = sub_params = None
+
+        if is_transform:
+            fits, Xs = do_fit_transform(dsk, next_token, step, cv,
+                                        sub_fields, sub_tokens, sub_params,
+                                        Xs, ys, sub_fit_params, n_splits,
+                                        error_score)
+        else:
+            fits = do_fit(dsk, next_token, step, cv, sub_fields,
+                            sub_tokens, sub_params, Xs, ys, sub_fit_params,
+                            n_splits, error_score)
+    return (fits, Xs) if is_transform else (fits, None)
+
+
 def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                  fit_params, n_splits, error_score, is_transform):
     if 'steps' in fields:
@@ -327,78 +425,10 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
 
     fit_steps = []
     for (step_name, step), transform in instrs:
-        sub_fields, sub_inds = map(list, unzip(step_fields_lk[step_name], 2))
-
-        sub_fit_params = fit_params_lk[step_name]
-
-        if step_name in field_to_index:
-            # The estimator may change each call
-            new_fits = {}
-            new_Xs = {}
-            est_index = field_to_index[step_name]
-
-            for ids in groupby_id(est_index, tokens):
-                # Get the estimator for this subgroup
-                sub_est = params[ids[0]][est_index]
-                if sub_est is MISSING:
-                    sub_est = step
-
-                # If an estimator is `None`, there's nothing to do
-                if sub_est is None:
-                    new_fits.update(dict.fromkeys(ids, None))
-                    if transform:
-                        new_Xs.update(zip(ids, get(ids, Xs)))
-                else:
-                    # Extract the proper subset of Xs, ys
-                    sub_Xs = get(ids, Xs)
-                    sub_ys = get(ids, ys)
-                    # Only subset the parameters/tokens if necessary
-                    if sub_fields:
-                        sub_tokens = list(pluck(sub_inds, get(ids, tokens)))
-                        sub_params = list(pluck(sub_inds, get(ids, params)))
-                    else:
-                        sub_tokens = sub_params = None
-
-                    if transform:
-                        sub_fits, sub_Xs = do_fit_transform(dsk, next_token,
-                                                            sub_est, cv, sub_fields,
-                                                            sub_tokens, sub_params,
-                                                            sub_Xs, sub_ys,
-                                                            sub_fit_params,
-                                                            n_splits, error_score)
-                        new_Xs.update(zip(ids, sub_Xs))
-                        new_fits.update(zip(ids, sub_fits))
-                    else:
-                        sub_fits = do_fit(dsk, next_token, sub_est, cv,
-                                          sub_fields, sub_tokens, sub_params,
-                                          sub_Xs, sub_ys, sub_fit_params,
-                                          n_splits, error_score)
-                        new_fits.update(zip(ids, sub_fits))
-            # Extract lists of transformed Xs and fit steps
-            all_ids = list(range(len(Xs)))
-            if transform:
-                Xs = get(all_ids, new_Xs)
-            fits = get(all_ids, new_fits)
-        elif step is None:
-            # Nothing to do
-            fits = [None] * len(Xs)
-        else:
-            # Only subset the parameters/tokens if necessary
-            if sub_fields:
-                sub_tokens = list(pluck(sub_inds, tokens))
-                sub_params = list(pluck(sub_inds, params))
-            else:
-                sub_tokens = sub_params = None
-
-            if transform:
-                fits, Xs = do_fit_transform(dsk, next_token, step, cv,
-                                            sub_fields, sub_tokens, sub_params,
-                                            Xs, ys, sub_fit_params, n_splits,
-                                            error_score)
-            else:
-                fits = do_fit(dsk, next_token, step, cv, sub_fields,
-                              sub_tokens, sub_params, Xs, ys, sub_fit_params,
-                              n_splits, error_score)
+        fits, Xs = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
+                                params, Xs, ys, fit_params, n_splits,
+                                error_score, step_fields_lk, fit_params_lk,
+                                field_to_index, step_name, True, transform)
         fit_steps.append(fits)
 
     # Rebuild the pipelines
@@ -423,20 +453,6 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     if is_transform:
         return out_ests, Xs
     return out_ests
-
-
-def groupby_id(index, tokens):
-    id_groups = []
-
-    def new_group():
-        o = []
-        id_groups.append(o)
-        return o.append
-
-    _id_groups = defaultdict(new_group)
-    for n, t in enumerate(pluck(index, tokens)):
-        _id_groups[t](n)
-    return id_groups
 
 
 def _do_n_samples(dsk, token, Xs, n_splits):
@@ -475,67 +491,12 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     fit_steps = []
     tr_Xs = []
     for (step_name, step) in est.transformer_list:
-        sub_fields, sub_inds = map(list, unzip(step_fields_lk[step_name], 2))
-        sub_fit_params = fit_params_lk[step_name]
-
-        if step_name in field_to_index:
-            # The estimator may change each call
-            new_fits = {}
-            new_Xs = {}
-            est_index = field_to_index[step_name]
-
-            for ids in groupby_id(est_index, tokens):
-                # Get the estimator for this subgroup
-                sub_est = params[ids[0]][est_index]
-                if sub_est is MISSING:
-                    sub_est = step
-
-                # If an estimator is `None`, there's nothing to do
-                if sub_est is None:
-                    nones = dict.fromkeys(ids, None)
-                    new_fits.update(nones)
-                    new_Xs.update(nones)
-                else:
-                    # Extract the proper subset of Xs, ys
-                    sub_Xs = get(ids, Xs)
-                    sub_ys = get(ids, ys)
-                    # Only subset the parameters/tokens if necessary
-                    if sub_fields:
-                        sub_tokens = list(pluck(sub_inds, get(ids, tokens)))
-                        sub_params = list(pluck(sub_inds, get(ids, params)))
-                    else:
-                        sub_tokens = sub_params = None
-
-                    sub_fits, sub_Xs = do_fit_transform(dsk, next_token,
-                                                        sub_est, cv, sub_fields,
-                                                        sub_tokens, sub_params,
-                                                        sub_Xs, sub_ys,
-                                                        sub_fit_params,
-                                                        n_splits, error_score)
-                    new_Xs.update(zip(ids, sub_Xs))
-                    new_fits.update(zip(ids, sub_fits))
-            # Extract lists of transformed Xs and fit steps
-            all_ids = list(range(len(Xs)))
-            new_fits = get(all_ids, new_fits)
-            new_Xs = get(all_ids, new_Xs)
-        elif step is None:
-            # Nothing to do
-            new_Xs = new_fits = [None] * len(Xs)
-        else:
-            # Only subset the parameters/tokens if necessary
-            if sub_fields:
-                sub_tokens = list(pluck(sub_inds, tokens))
-                sub_params = list(pluck(sub_inds, params))
-            else:
-                sub_tokens = sub_params = None
-
-            new_fits, new_Xs = do_fit_transform(dsk, next_token, step, cv,
-                                                sub_fields, sub_tokens,
-                                                sub_params, Xs, ys,
-                                                sub_fit_params, n_splits,
-                                                error_score)
-        fit_steps.append(new_fits)
-        tr_Xs.append(new_Xs)
+        fits, out_Xs = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
+                                    params, Xs, ys, fit_params, n_splits,
+                                    error_score, step_fields_lk, fit_params_lk,
+                                    field_to_index, step_name, False, True)
+        fit_steps.append(fits)
+        tr_Xs.append(out_Xs)
 
     # Rebuild the FeatureUnions
     step_names = [n for n, _ in est.transformer_list]
