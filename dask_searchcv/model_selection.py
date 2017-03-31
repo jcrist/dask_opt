@@ -774,6 +774,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         return dask.visualize(self.dask_graph_, filename=filename,
                               format=format, **kwargs)
 
+
 _DOC_TEMPLATE = """{oneliner}
 
 {name} implements a "fit" and a "score" method.
@@ -989,6 +990,7 @@ class GridSearchCV(DaskBaseSearchCV):
     def _get_param_iterator(self):
         """Return ParameterGrid instance for the given param_grid"""
         return model_selection.ParameterGrid(self.param_grid)
+
 
 # ------------------ #
 # RandomizedSearchCV #
