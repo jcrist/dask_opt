@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 from operator import getitem
 from collections import defaultdict
 from itertools import repeat
+from multiprocessing import cpu_count
 import numbers
 
 import numpy as np
@@ -619,8 +620,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     """Base class for hyper parameter search with cross-validation."""
 
     def __init__(self, estimator, scoring=None, iid=True, refit=True, cv=None,
-                 error_score='raise', return_train_score=True, cache_cv=True,
-                 scheduler=None):
+                 error_score='raise', return_train_score=True, scheduler=None,
+                 n_jobs=-1, cache_cv=True):
         self.scoring = scoring
         self.estimator = estimator
         self.iid = iid
@@ -628,8 +629,9 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.cv = cv
         self.error_score = error_score
         self.return_train_score = return_train_score
-        self.cache_cv = cache_cv
         self.scheduler = scheduler
+        self.n_jobs = n_jobs
+        self.cache_cv = cache_cv
 
     @property
     def _estimator_type(self):
@@ -739,8 +741,21 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
+        if not isinstance(self.n_jobs, int):
+            raise TypeError("n_jobs should be an int, got %s" % self.n_jobs)
+        if self.n_jobs == -1:
+            n_jobs = None  # Scheduler default is use all cores
+        elif self.n_jobs < -1:
+            n_jobs = cpu_count() + 1 + self.n_jobs
+        else:
+            n_jobs = self.n_jobs
+
         if self.scheduler is None:
-            scheduler = dask.context._globals.get('get') or threaded_get
+            scheduler = dask.context._globals.get('get')
+            if scheduler is None:
+                scheduler = dask.get if n_jobs == 1 else threaded_get
+        elif self.scheduler in ('threading', 'multiprocessing') and n_jobs == 1:
+            scheduler = dask.get
         elif callable(self.scheduler):
             scheduler = self.scheduler
         elif self.scheduler == 'threading':
@@ -756,7 +771,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             except Exception:
                 raise ValueError("Unknown scheduler %r" % self.scheduler)
 
-        out = scheduler(dsk, keys)
+        out = scheduler(dsk, keys, num_workers=n_jobs)
 
         self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
@@ -854,6 +869,11 @@ scheduler : string, callable, or None, default=None
     or "sync") or provide the scheduler ``get`` function. Other arguments are
     assumed to be the address of a distributed scheduler, and passed to
     ``dask.distributed.Client``.
+
+n_jobs : int, default=-1
+    Number of jobs to run in parallel. Ignored for the synchronous and
+    distributed schedulers. If ``n_jobs == -1`` [default] all cpus are used.
+    For ``n_jobs < -1``, ``(n_cpus + 1 + n_jobs)`` are used.
 
 cache_cv : bool, default=True
     Whether to extract each train/test subset at most once in each worker
@@ -978,7 +998,7 @@ GridSearchCV(cache_cv=..., cv=..., error_score=...,
                       kernel=..., max_iter=-1, probability=False,
                       random_state=..., shrinking=..., tol=...,
                       verbose=...),
-        iid=..., param_grid=..., refit=..., return_train_score=...,
+        iid=..., n_jobs=..., param_grid=..., refit=..., return_train_score=...,
         scheduler=..., scoring=...)
 >>> sorted(clf.cv_results_.keys())  # doctest: +NORMALIZE_WHITESPACE +ELLIPSIS
 ['mean_test_score', 'mean_train_score', 'param_C', 'param_kernel',...
@@ -997,11 +1017,12 @@ class GridSearchCV(DaskBaseSearchCV):
 
     def __init__(self, estimator, param_grid, scoring=None, iid=True,
                  refit=True, cv=None, error_score='raise',
-                 return_train_score=True, scheduler=None, cache_cv=True):
+                 return_train_score=True, scheduler=None, n_jobs=-1,
+                 cache_cv=True):
         super(GridSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
-                scheduler=scheduler, cache_cv=cache_cv)
+                scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
 
         _check_param_grid(param_grid)
         self.param_grid = param_grid
@@ -1057,8 +1078,9 @@ RandomizedSearchCV(cache_cv=..., cv=..., error_score=...,
                       kernel=..., max_iter=..., probability=...,
                       random_state=..., shrinking=..., tol=...,
                       verbose=...),
-        iid=..., n_iter=..., param_distributions=..., random_state=...,
-        refit=..., return_train_score=..., scheduler=..., scoring=...)
+        iid=..., n_iter=..., n_jobs=..., param_distributions=...,
+        random_state=..., refit=..., return_train_score=...,
+        scheduler=..., scoring=...)
 >>> sorted(clf.cv_results_.keys())  # doctest: +NORMALIZE_WHITESPACE +ELLIPSIS
 ['mean_test_score', 'mean_train_score', 'param_C', 'param_kernel',...
  'params', 'rank_test_score', 'split0_test_score', 'split0_train_score',...
@@ -1077,12 +1099,12 @@ class RandomizedSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_distributions, n_iter=10,
                  random_state=None, scoring=None, iid=True, refit=True,
                  cv=None, error_score='raise', return_train_score=True,
-                 scheduler=None, cache_cv=True):
+                 scheduler=None, n_jobs=-1, cache_cv=True):
 
         super(RandomizedSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
-                scheduler=scheduler, cache_cv=cache_cv)
+                scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
 
         self.param_distributions = param_distributions
         self.n_iter = n_iter
