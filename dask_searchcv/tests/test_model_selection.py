@@ -578,7 +578,7 @@ def test_scheduler_param(scheduler):
 
 
 @pytest.mark.skipif('loop is None')
-def test_scheduler_param_distriuted(loop):
+def test_scheduler_param_distributed(loop):
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
     gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3)
     with cluster() as (s, [a, b]):
