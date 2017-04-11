@@ -43,6 +43,12 @@ from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
                                       ignore_warnings)
 
+try:
+    from distributed import Client
+    from distributed.utils_test import cluster, loop
+except:
+    loop = None
+
 
 class assert_dask_compute(Callback):
     def __init__(self, compute=False):
@@ -315,7 +321,7 @@ def test_pipeline_feature_union():
 
     gs = GridSearchCV(pipe, param_grid=param_grid)
     gs.fit(X, y)
-    dgs = dcv.GridSearchCV(pipe, param_grid=param_grid, get=dask.get)
+    dgs = dcv.GridSearchCV(pipe, param_grid=param_grid, scheduler='sync')
     dgs.fit(X, y)
 
     # Check best params match
@@ -359,7 +365,7 @@ def test_pipeline_sub_estimators():
 
     gs = GridSearchCV(pipe, param_grid=param_grid)
     gs.fit(X, y)
-    dgs = dcv.GridSearchCV(pipe, param_grid=param_grid, get=dask.get)
+    dgs = dcv.GridSearchCV(pipe, param_grid=param_grid, scheduler='sync')
     dgs.fit(X, y)
 
     # Check best params match
@@ -529,7 +535,7 @@ def test_cache_cv():
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
     X2 = X.view(CountTakes)
     gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]},
-                          cv=3, cache_cv=False, get=dask.get)
+                          cv=3, cache_cv=False, scheduler='sync')
     gs.fit(X2, y)
     assert X2.count == 2 * 3 * 3  # (1 train + 1 test) * n_params * n_splits
 
@@ -557,3 +563,32 @@ def test_CVCache_serializable():
     assert cache2.pairwise == cache.pairwise
     assert all((cache2.splits[i][j] == cache.splits[i][j]).all()
                for i in range(2) for j in range(2))
+
+
+@pytest.mark.parametrize('scheduler',
+        [None, 'threading', 'sync', 'multiprocessing', dask.get])
+def test_scheduler_param(scheduler):
+    if scheduler == 'multiprocessing':
+        pytest.importorskip('dask.multiprocessing')
+
+    X, y = make_classification(n_samples=100, n_features=10, random_state=0)
+    gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3,
+                          scheduler=scheduler)
+    gs.fit(X, y)
+
+
+@pytest.mark.skipif('loop is None')
+def test_scheduler_param_distriuted(loop):
+    X, y = make_classification(n_samples=100, n_features=10, random_state=0)
+    gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3)
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            gs.fit(X, y)
+
+
+def test_scheduler_param_bad():
+    X, y = make_classification(n_samples=100, n_features=10, random_state=0)
+    gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3,
+                          scheduler='bad')
+    with pytest.raises(ValueError):
+        gs.fit(X, y)

@@ -620,7 +620,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
     def __init__(self, estimator, scoring=None, iid=True, refit=True, cv=None,
                  error_score='raise', return_train_score=True, cache_cv=True,
-                 get=None):
+                 scheduler=None):
         self.scoring = scoring
         self.estimator = estimator
         self.iid = iid
@@ -629,7 +629,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.error_score = error_score
         self.return_train_score = return_train_score
         self.cache_cv = cache_cv
-        self.get = get
+        self.scheduler = scheduler
 
     @property
     def _estimator_type(self):
@@ -739,8 +739,24 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
-        get = self.get or dask.context._globals.get('get') or threaded_get
-        out = get(dsk, keys)
+        if self.scheduler is None:
+            scheduler = dask.context._globals.get('get') or threaded_get
+        elif callable(self.scheduler):
+            scheduler = self.scheduler
+        elif self.scheduler == 'threading':
+            scheduler = threaded_get
+        elif self.scheduler == 'multiprocessing':
+            from dask.multiprocessing import get as scheduler
+        elif self.scheduler == 'sync':
+            scheduler = dask.get
+        else:
+            try:
+                from dask.distributed import Client
+                scheduler = Client(self.scheduler, set_as_default=False).get
+            except Exception:
+                raise ValueError("Unknown scheduler %r" % self.scheduler)
+
+        out = scheduler(dsk, keys)
 
         self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
@@ -831,10 +847,13 @@ return_train_score : boolean, default=True
     If ``'False'``, the ``cv_results_`` attribute will not include training
     scores.
 
-get : None (default) or scheduler get function
-    The dask scheduler ``get`` function to use. Default is to use the
-    global scheduler if set, and fallback to the threaded scheduler
-    otherwise.
+scheduler : string, callable, or None, default=None
+    The dask scheduler to use. Default is to use the global scheduler if set,
+    and fallback to the threaded scheduler otherwise. To use a different
+    scheduler, specify it by name (either "threading", "multiprocessing",
+    or "sync") or provide the scheduler ``get`` function. Other arguments are
+    assumed to be the address of a distributed scheduler, and passed to
+    ``dask.distributed.Client``.
 
 cache_cv : bool, default=True
     Whether to extract each train/test subset at most once in each worker
@@ -959,8 +978,8 @@ GridSearchCV(cache_cv=..., cv=..., error_score=...,
                       kernel=..., max_iter=-1, probability=False,
                       random_state=..., shrinking=..., tol=...,
                       verbose=...),
-        get=..., iid=..., param_grid=..., refit=...,
-        return_train_score=..., scoring=...)
+        iid=..., param_grid=..., refit=..., return_train_score=...,
+        scheduler=..., scoring=...)
 >>> sorted(clf.cv_results_.keys())  # doctest: +NORMALIZE_WHITESPACE +ELLIPSIS
 ['mean_test_score', 'mean_train_score', 'param_C', 'param_kernel',...
  'params', 'rank_test_score', 'split0_test_score', 'split0_train_score',...
@@ -978,11 +997,11 @@ class GridSearchCV(DaskBaseSearchCV):
 
     def __init__(self, estimator, param_grid, scoring=None, iid=True,
                  refit=True, cv=None, error_score='raise',
-                 return_train_score=True, get=None, cache_cv=True):
+                 return_train_score=True, scheduler=None, cache_cv=True):
         super(GridSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
-                get=get, cache_cv=cache_cv)
+                scheduler=scheduler, cache_cv=cache_cv)
 
         _check_param_grid(param_grid)
         self.param_grid = param_grid
@@ -1038,8 +1057,8 @@ RandomizedSearchCV(cache_cv=..., cv=..., error_score=...,
                       kernel=..., max_iter=..., probability=...,
                       random_state=..., shrinking=..., tol=...,
                       verbose=...),
-        get=..., iid=..., n_iter=..., param_distributions=...,
-        random_state=..., refit=..., return_train_score=..., scoring=...)
+        iid=..., n_iter=..., param_distributions=..., random_state=...,
+        refit=..., return_train_score=..., scheduler=..., scoring=...)
 >>> sorted(clf.cv_results_.keys())  # doctest: +NORMALIZE_WHITESPACE +ELLIPSIS
 ['mean_test_score', 'mean_train_score', 'param_C', 'param_kernel',...
  'params', 'rank_test_score', 'split0_test_score', 'split0_train_score',...
@@ -1058,12 +1077,12 @@ class RandomizedSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, param_distributions, n_iter=10,
                  random_state=None, scoring=None, iid=True, refit=True,
                  cv=None, error_score='raise', return_train_score=True,
-                 get=None, cache_cv=True):
+                 scheduler=None, cache_cv=True):
 
         super(RandomizedSearchCV, self).__init__(estimator=estimator,
                 scoring=scoring, iid=iid, refit=refit, cv=cv,
                 error_score=error_score, return_train_score=return_train_score,
-                get=get, cache_cv=cache_cv)
+                scheduler=scheduler, cache_cv=cache_cv)
 
         self.param_distributions = param_distributions
         self.n_iter = n_iter
