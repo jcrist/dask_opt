@@ -616,6 +616,45 @@ def compute_n_splits(cv, X, y=None, groups=None):
         return delayed(cv).get_n_splits(X, y, groups).compute()
 
 
+def _normalize_n_jobs(n_jobs):
+    if not isinstance(n_jobs, int):
+        raise TypeError("n_jobs should be an int, got %s" % n_jobs)
+    if n_jobs == -1:
+        n_jobs = None  # Scheduler default is use all cores
+    elif n_jobs < -1:
+        n_jobs = cpu_count() + 1 + n_jobs
+    return n_jobs
+
+
+def _normalize_scheduler(scheduler, n_jobs, loop=None):
+    if scheduler is None:
+        scheduler = dask.context._globals.get('get')
+        if scheduler is None:
+            scheduler = dask.get if n_jobs == 1 else threaded_get
+    elif scheduler in ('threading', 'multiprocessing') and n_jobs == 1:
+        scheduler = dask.get
+    elif callable(scheduler):
+        scheduler = scheduler
+    elif scheduler == 'threading':
+        scheduler = threaded_get
+    elif scheduler == 'multiprocessing':
+        from dask.multiprocessing import get as scheduler
+    elif scheduler == 'sync':
+        scheduler = dask.get
+    else:
+        try:
+            from dask.distributed import Client
+            # We pass loop to make testing possible, not needed for normal use
+            scheduler = Client(scheduler, set_as_default=False, loop=loop).get
+        except Exception as e:
+            msg = ("Failed to initialize scheduler from parameter %r. "
+                   "This could be due to a typo, or a failure to initialize "
+                   "the distributed scheduler. Original error is below:\n\n"
+                   "%r" % (scheduler, e))
+            raise ValueError(msg)
+    return scheduler
+
+
 class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     """Base class for hyper parameter search with cross-validation."""
 
@@ -741,35 +780,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
-        if not isinstance(self.n_jobs, int):
-            raise TypeError("n_jobs should be an int, got %s" % self.n_jobs)
-        if self.n_jobs == -1:
-            n_jobs = None  # Scheduler default is use all cores
-        elif self.n_jobs < -1:
-            n_jobs = cpu_count() + 1 + self.n_jobs
-        else:
-            n_jobs = self.n_jobs
-
-        if self.scheduler is None:
-            scheduler = dask.context._globals.get('get')
-            if scheduler is None:
-                scheduler = dask.get if n_jobs == 1 else threaded_get
-        elif self.scheduler in ('threading', 'multiprocessing') and n_jobs == 1:
-            scheduler = dask.get
-        elif callable(self.scheduler):
-            scheduler = self.scheduler
-        elif self.scheduler == 'threading':
-            scheduler = threaded_get
-        elif self.scheduler == 'multiprocessing':
-            from dask.multiprocessing import get as scheduler
-        elif self.scheduler == 'sync':
-            scheduler = dask.get
-        else:
-            try:
-                from dask.distributed import Client
-                scheduler = Client(self.scheduler, set_as_default=False).get
-            except Exception:
-                raise ValueError("Unknown scheduler %r" % self.scheduler)
+        n_jobs = _normalize_n_jobs(self.n_jobs)
+        scheduler = _normalize_scheduler(self.scheduler, n_jobs)
 
         out = scheduler(dsk, keys, num_workers=n_jobs)
 

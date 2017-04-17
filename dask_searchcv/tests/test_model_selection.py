@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 import os
 import pickle
 from itertools import product
+from multiprocessing import cpu_count
 
 import pytest
 import numpy as np
@@ -13,6 +14,7 @@ import dask.array as da
 from dask.base import tokenize
 from dask.callbacks import Callback
 from dask.delayed import delayed
+from dask.threaded import get as get_threading
 from dask.utils import tmpdir
 
 from sklearn.datasets import make_classification, load_iris
@@ -37,7 +39,8 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.svm import SVC
 
 import dask_searchcv as dcv
-from dask_searchcv.model_selection import compute_n_splits, check_cv
+from dask_searchcv.model_selection import (compute_n_splits, check_cv,
+        _normalize_n_jobs, _normalize_scheduler)
 from dask_searchcv.methods import CVCache
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
@@ -46,8 +49,10 @@ from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
 try:
     from distributed import Client
     from distributed.utils_test import cluster, loop
+    has_distributed = True
 except:
-    loop = None
+    loop = pytest.fixture(lambda: None)
+    has_distributed = False
 
 
 class assert_dask_compute(Callback):
@@ -565,19 +570,34 @@ def test_CVCache_serializable():
                for i in range(2) for j in range(2))
 
 
-@pytest.mark.parametrize('scheduler',
-        [None, 'threading', 'sync', 'multiprocessing', dask.get])
-def test_scheduler_param(scheduler):
+def test_normalize_n_jobs():
+    assert _normalize_n_jobs(-1) is None
+    assert _normalize_n_jobs(-2) == cpu_count() - 1
+    with pytest.raises(TypeError):
+        _normalize_n_jobs('not an integer')
+
+
+@pytest.mark.parametrize('scheduler,n_jobs,get',
+                         [(None, 4, get_threading),
+                          ('threading', 4, get_threading),
+                          ('threading', 1, dask.get),
+                          ('sync', 4, dask.get),
+                          ('multiprocessing', 4, None),
+                          (dask.get, 4, dask.get)])
+def test_scheduler_param(scheduler, n_jobs, get):
     if scheduler == 'multiprocessing':
-        pytest.importorskip('dask.multiprocessing')
+        mp = pytest.importorskip('dask.multiprocessing')
+        get = mp.get
+
+    assert _normalize_scheduler(scheduler, n_jobs) is get
 
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
     gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3,
-                          scheduler=scheduler)
+                          scheduler=scheduler, n_jobs=n_jobs)
     gs.fit(X, y)
 
 
-@pytest.mark.skipif('loop is None')
+@pytest.mark.skipif('not has_distributed')
 def test_scheduler_param_distributed(loop):
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
     gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3)
@@ -586,9 +606,6 @@ def test_scheduler_param_distributed(loop):
             gs.fit(X, y)
 
 
-def test_scheduler_param_bad():
-    X, y = make_classification(n_samples=100, n_features=10, random_state=0)
-    gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3,
-                          scheduler='bad')
+def test_scheduler_param_bad(loop):
     with pytest.raises(ValueError):
-        gs.fit(X, y)
+        _normalize_scheduler('threeding', 4, loop)
