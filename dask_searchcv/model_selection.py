@@ -626,32 +626,47 @@ def _normalize_n_jobs(n_jobs):
     return n_jobs
 
 
+_scheduler_aliases = {'sync': 'synchronous',
+                      'sequential': 'synchronous',
+                      'threaded': 'threading'}
+
+
 def _normalize_scheduler(scheduler, n_jobs, loop=None):
+    # Default
     if scheduler is None:
         scheduler = dask.context._globals.get('get')
         if scheduler is None:
             scheduler = dask.get if n_jobs == 1 else threaded_get
-    elif scheduler in ('threading', 'multiprocessing') and n_jobs == 1:
+        return scheduler
+
+    # Get-functions
+    if callable(scheduler):
+        return scheduler
+
+    # Support name aliases
+    if isinstance(scheduler, str):
+        scheduler = _scheduler_aliases.get(scheduler, scheduler)
+
+    if scheduler in ('threading', 'multiprocessing') and n_jobs == 1:
         scheduler = dask.get
-    elif callable(scheduler):
-        scheduler = scheduler
     elif scheduler == 'threading':
         scheduler = threaded_get
     elif scheduler == 'multiprocessing':
         from dask.multiprocessing import get as scheduler
-    elif scheduler == 'sync':
+    elif scheduler == 'synchronous':
         scheduler = dask.get
     else:
         try:
             from dask.distributed import Client
             # We pass loop to make testing possible, not needed for normal use
-            scheduler = Client(scheduler, set_as_default=False, loop=loop).get
+            return Client(scheduler, set_as_default=False, loop=loop).get
         except Exception as e:
             msg = ("Failed to initialize scheduler from parameter %r. "
                    "This could be due to a typo, or a failure to initialize "
                    "the distributed scheduler. Original error is below:\n\n"
                    "%r" % (scheduler, e))
-            raise ValueError(msg)
+        # Re-raise outside the except to provide a cleaner error message
+        raise ValueError(msg)
     return scheduler
 
 
@@ -878,9 +893,9 @@ scheduler : string, callable, or None, default=None
     The dask scheduler to use. Default is to use the global scheduler if set,
     and fallback to the threaded scheduler otherwise. To use a different
     scheduler, specify it by name (either "threading", "multiprocessing",
-    or "sync") or provide the scheduler ``get`` function. Other arguments are
-    assumed to be the address of a distributed scheduler, and passed to
-    ``dask.distributed.Client``.
+    or "synchronous") or provide the scheduler ``get`` function. Other
+    arguments are assumed to be the address of a distributed scheduler,
+    and passed to ``dask.distributed.Client``.
 
 n_jobs : int, default=-1
     Number of jobs to run in parallel. Ignored for the synchronous and

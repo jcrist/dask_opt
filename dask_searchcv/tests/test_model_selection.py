@@ -580,7 +580,10 @@ def test_normalize_n_jobs():
 @pytest.mark.parametrize('scheduler,n_jobs,get',
                          [(None, 4, get_threading),
                           ('threading', 4, get_threading),
+                          ('threaded', 4, get_threading),
                           ('threading', 1, dask.get),
+                          ('sequential', 4, dask.get),
+                          ('synchronous', 4, dask.get),
                           ('sync', 4, dask.get),
                           ('multiprocessing', 4, None),
                           (dask.get, 4, dask.get)])
