@@ -1,9 +1,9 @@
 """
 Online model selection
 
-Book-keeping is achieved by tokenization of args with an assertion to 
-avoid mutation of existing items with different values. I.e. this ensures that our 
-tokenize(func, args) works.
+book-keeping for caching jobs that have already been submitted is achieved by tokenization of 
+estimators and input parameter giving unique keys on the dask graph. The default parameters of 
+estimators are combined with the input parameters to give unique keys.
 
 """
 
@@ -245,12 +245,10 @@ def flesh_out_params(estimator, params):
                                   "in a DaskBaseSearchCV search"))
 
     default_params = estimator.get_params()
-    # we dissoc the transformer lists, todo: do this for estimators as well
+    # we dissoc the transformer lists
     # default_params = {k: v for k, v in default_params.items() if not k.endswith('transformer_list')}
-
     # note: there can be new parameters if they are
     # get new default parameters implied by subestimators in a pipeline
-    # todo: sub_estimators = []
     # if not all(k in default_params for k in params):
     #     # log.warn('All parameters should be relevant to the estimator - pruning extras')
     #     # params = {k: v for k, v in params.items() if k in default_params}
@@ -327,7 +325,6 @@ def do_pipeline(dsk, est, X_name, y_name, params, fit_params, error_score, trans
         ) if step else (None, Xt_name)  # ... pass-through for pipeline
         fit_steps.append(fit_name)
     step_name, step = est.steps[-1]
-    # fit_params_ = _get_fit_params(fit_params_dict[step_name])
 
     if transform:
         fit_name, Xt_name = do_fit_transform(
@@ -342,7 +339,7 @@ def do_pipeline(dsk, est, X_name, y_name, params, fit_params, error_score, trans
     fit_steps.append(fit_name)
 
     est_type = type(est).__name__.lower()
-    # fit_params = _get_fit_params(fit_params)  # we keep the keys for tokenizing
+
     token = tokenize(X_name, y_name, params, fit_params, error_score, transform)
     fit_name = est_type + '-' + token
     step_names = list(tz.pluck(0, est.steps))
@@ -405,7 +402,6 @@ def do_fit_and_score(
     dsk, est, Xtrain_name, ytrain_name, Xtest_name, ytest_name, params, fit_params, scorer,
     return_train_score, error_score
 ):
-    # n_and_fit_params = _get_fit_params(cv, fit_params, n_splits)
     fit_name = do_fit(dsk, est, Xtrain_name, ytrain_name, params, fit_params, error_score)
     score_name = do_score(
         dsk, fit_name, Xtrain_name, ytrain_name, Xtest_name, ytest_name, scorer, return_train_score)
@@ -433,7 +429,7 @@ def update_graph(dsk, estimator, X_name, y_name, params, fit_params, cv_name, n_
                  return_train_score, error_score):
     # munge parameters, for unique keys:
     params = flesh_out_params(estimator, params)
-    fit_params = _persist_fit_params(dsk, fit_params)  # todo: safe update of graph??
+    fit_params = _persist_fit_params(dsk, fit_params)
 
     cv_score_names = []
     for n in range(n_splits):
