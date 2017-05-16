@@ -50,9 +50,9 @@ from dask_searchcv.utils import to_indexable
 log = logging.getLogger(__name__)
 
 try:
-    from cytoolz import get, pluck, concat
+    from cytoolz import concat
 except:  # pragma: no cover
-    from toolz import get, pluck, concat
+    from toolz import concat
 
 
 def _persist_fit_params(dsk, fit_params):
@@ -224,6 +224,7 @@ def _str_cmp(x, y):
         return normalize_estimator(x) == normalize_estimator(y)
     else:
         return str(x) == str(y)
+
 
 _exception_string = (
     'graph already has a key {k} with a different value: '

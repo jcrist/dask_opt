@@ -55,6 +55,7 @@ class Thing2(BaseEstimator):
     def transform(self, X, y=None):
         return X
 
+
 num_cmp_cols = [
     'mean_test_score', 'mean_train_score', 'split0_test_score',
     'split0_train_score', 'split1_test_score', 'split1_train_score',
