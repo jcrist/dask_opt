@@ -50,25 +50,6 @@ except:  # pragma: no cover
     from toolz import get, pluck, concat
 
 
-def _to_keys(dsk, *args):
-    """Safe to_keys"""
-    for x in args:
-        if x is None:
-            yield None
-        elif isinstance(x, da.Array):
-            x = delayed(x)
-            dsk.update(x.dask)
-            yield x.key
-        elif isinstance(x, Delayed):
-            dsk.update(x.dask)
-            yield x.key
-        else:
-            assert not isinstance(x, Base)
-            key = 'array-' + tokenize(x)
-            dsk[key] = x
-            yield key
-
-
 def _persist_fit_params(dsk, fit_params):
     """Persist all input fit params to the cv cache and return keys in place with full name 
     """
@@ -237,8 +218,28 @@ _exception_string = (
     )
 
 
+def _to_keys(dsk, *args):
+    """Safe to keys"""
+    for x in args:
+        if x is None:
+            yield None
+        elif isinstance(x, da.Array):
+            x = delayed(x)
+            dsk.update(x.dask)
+            yield x.key
+        elif isinstance(x, Delayed):
+            dsk.update(x.dask)
+            yield x.key
+        else:
+            assert not isinstance(x, Base)
+            key = 'array-' + tokenize(x)
+            dsk[key] = x
+            yield key
+
+
 def update_dsk(dsk, k, v, cmp=_str_cmp):
-    """update the dask graph, checking that """
+    """Update the dask graph defensively. Only add new items, raise exception for attempt at adding 
+    keys that violate a comparison function"""
     if k in dsk:
         if not cmp(dsk[k], v):
             raise ValueError(
@@ -304,6 +305,7 @@ def do_fit(dsk, est, X_name, y_name, params, fit_params, error_score):
 
 def do_fit_transform(dsk, est, X_name, y_name, params, fit_params, error_score):
     check_estimator_parameters(est, params)
+
     if isinstance(est, Pipeline):
         return do_pipeline(
             dsk, est, X_name, y_name, params, fit_params, error_score, transform=True)
@@ -431,7 +433,7 @@ def do_fit_and_score(
 def build_graph(estimator, X, y, cv, groups, cache_cv=True):
     dsk = {}
     X, y, groups = to_indexable(X, y, groups)
-    X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
+    X_name, y_name, groups_name = _to_keys(dsk, X, y, groups)
     cv = check_cv(cv, y, is_classifier(estimator))
     n_splits = compute_n_splits(cv, X, y, groups)
     is_pairwise = getattr(estimator, '_pairwise', False)
@@ -867,9 +869,10 @@ class GridSearchCV(DaskBaseSearchCV):
                  return_train_score=True, scheduler=None, n_jobs=-1,
                  cache_cv=True):
         super(GridSearchCV, self).__init__(estimator=estimator,
-                scoring=scoring, iid=iid, refit=refit, cv=cv,
-                error_score=error_score, return_train_score=return_train_score,
-                scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
+                                           scoring=scoring, iid=iid, refit=refit, cv=cv,
+                                           error_score=error_score,
+                                           return_train_score=return_train_score,
+                                           scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
 
         _check_param_grid(param_grid)
         self.param_grid = param_grid
@@ -947,11 +950,12 @@ class RandomizedSearchCV(DaskBaseSearchCV):
                  random_state=None, scoring=None, iid=True, refit=True,
                  cv=None, error_score='raise', return_train_score=True,
                  scheduler=None, n_jobs=-1, cache_cv=True):
-
         super(RandomizedSearchCV, self).__init__(estimator=estimator,
-                scoring=scoring, iid=iid, refit=refit, cv=cv,
-                error_score=error_score, return_train_score=return_train_score,
-                scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
+                                                 scoring=scoring, iid=iid, refit=refit, cv=cv,
+                                                 error_score=error_score,
+                                                 return_train_score=return_train_score,
+                                                 scheduler=scheduler, n_jobs=n_jobs,
+                                                 cache_cv=cache_cv)
 
         self.param_distributions = param_distributions
         self.n_iter = n_iter
