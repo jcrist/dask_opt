@@ -3,7 +3,7 @@ import numbers
 import dask_searchcv.online_model_selection as oms
 import numpy as np
 import toolz as tz
-from dask_searchcv import RandomizedSearchCV
+from dask_searchcv.online_model_selection import RandomizedSearchCV
 from distributed import Client, as_completed
 from sklearn.datasets import load_digits
 from sklearn.metrics.scorer import check_scoring
@@ -69,9 +69,8 @@ def fit_async(
             logger.info('Best score now: {}, for parameters {}'.format(best_score, best_params))
             if best_score > threshold:
                 break
-
-                #     if criterion(results):
-                #         break
+            # if criterion(results):
+            #     break
         params = next(params_iter)
         cv_score_names = oms.update_graph(dsk, estimator, X_name, y_name, params, fit_params,
                                           cv_name, n_splits,
@@ -92,6 +91,7 @@ def fit_async(
 
 @tz.curry
 def simple_criterion(threshold, results):
+    """Example stopping condition could be passed to fit_async"""
     return max(results.values()) > threshold
 
 
