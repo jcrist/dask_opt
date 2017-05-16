@@ -5,6 +5,9 @@ book-keeping for caching jobs that have already been submitted is achieved by to
 estimators and input parameter giving unique keys on the dask graph. The default parameters of 
 estimators are combined with the input parameters to give unique keys.
 
+we allow estimator duplicates since a pipeline or feature union may contain multiple instances with 
+different ids (... we could change the value comparison algorithm to achieve this too)
+
 """
 
 
@@ -25,7 +28,7 @@ from dask_searchcv.methods import fit_transform, fit, score, cv_split, cv_extrac
     feature_union_concat, feature_union, pipeline
 from dask_searchcv.utils import to_keys, to_indexable
 from sklearn import model_selection
-from sklearn.base import is_classifier
+from sklearn.base import is_classifier, BaseEstimator
 from sklearn.model_selection import LeaveOneGroupOut, LeavePGroupsOut, LeavePOut, LeaveOneOut
 from sklearn.model_selection._split import _CVIterableWrapper, PredefinedSplit, _BaseKFold, \
     BaseShuffleSplit, StratifiedKFold, KFold
@@ -58,7 +61,7 @@ def _to_keys(dsk, *args):
 def _persist_fit_params(dsk, fit_params):
     """Persist all input fit params to the cv cache and return keys in place with full name 
     """
-    if fit_params:
+    if fit_params is not None:
         # A mapping of {name: (name, graph-key)}
         param_values = to_indexable(*fit_params.values(), allow_scalars=True)
         _fit_params = {k: (k, token) for (k, token) in zip(fit_params, _to_keys(dsk, *param_values))}
@@ -212,7 +215,11 @@ def _normalize_scheduler(scheduler, n_jobs, loop=None):
 
 
 def _str_cmp(x, y):
-    return str(x) == str(y)
+    # todo: improve this comparison function
+    if hasattr(x, 'fit') and hasattr(y, 'fit'):
+        return normalize_estimator(x) == normalize_estimator(y)
+    else:
+        return str(x) == str(y)
 
 _exception_string = (
         'graph already has a key {k} with a different value: old: {vold}, new: {vnew}'
@@ -429,7 +436,6 @@ def update_graph(dsk, estimator, X_name, y_name, params, fit_params, cv_name, n_
                  return_train_score, error_score):
     # munge parameters, for unique keys:
     params = flesh_out_params(estimator, params)
-    fit_params = _persist_fit_params(dsk, fit_params)
 
     cv_score_names = []
     for n in range(n_splits):

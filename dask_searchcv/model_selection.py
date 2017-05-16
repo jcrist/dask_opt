@@ -805,6 +805,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
+        fit_params = oms._persist_fit_params(dsk, fit_params)
+
         # populate the graph with jobs
         keys, params_list = [], []
         for params in self._get_param_iterator():
@@ -1180,74 +1182,3 @@ class RandomizedSearchCV(DaskBaseSearchCV):
         """Return ParameterSampler instance for the given distributions"""
         return model_selection.ParameterSampler(self.param_distributions,
                 self.n_iter, random_state=self.random_state)
-
-
-class OnlineRandomizedSearchCV(DaskBaseSearchCV):
-    def __init__(self, estimator, param_distributions, n_iter=10,
-                 random_state=None, scoring=None, iid=True, refit=True,
-                 cv=None, error_score='raise', return_train_score=True,
-                 scheduler=None, n_jobs=-1, cache_cv=True):
-
-        super(OnlineRandomizedSearchCV, self).__init__(estimator=estimator,
-                scoring=scoring, iid=iid, refit=refit, cv=cv,
-                error_score=error_score, return_train_score=return_train_score,
-                scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
-
-        self.param_distributions = param_distributions
-        self.n_iter = n_iter
-        self.random_state = random_state
-
-    def _get_param_iterator(self):
-        """Return infinite number of parameters"""
-        return model_selection.ParameterSampler(self.param_distributions,
-                np.inf, random_state=self.random_state)
-
-    def fit(self, X, y=None, groups=None, client=None, target_score=0.95, **fit_params):
-        """Run fit with all sets of parameters, returns the running search, status can be checked
-        """
-
-        if client is None:
-            client = Client()
-
-        estimator = self.estimator
-        self.scorer_ = check_scoring(estimator, scoring=self.scoring)
-        error_score = self.error_score
-        if not (isinstance(error_score, numbers.Number) or
-                error_score == 'raise'):
-            raise ValueError("error_score must be the string 'raise' or a"
-                             " numeric value.")
-
-        dsk, X_name, y_name, cv_name, n_splits = oms.build_graph(
-            estimator, X, y, self.cv, groups, self.cache_cv)
-
-        self.dask_graph_ = dsk
-        self.n_splits_ = n_splits
-
-        ncores = client.ncores()
-
-        param_iter = self._get_param_iterator()
-        futures, param_list = [], []
-
-        for _ in range(ncores * 2):
-            params = next(param_iter)
-            score_name = oms.update_graph(dsk, estimator, X_name, y_name, params, fit_params,
-                                              cv_name, n_splits,
-                                              self.scorer_, self.return_train_score,
-                                              error_score=error_score)
-            futures.append(score_name)
-
-        best = -np.inf
-
-        for future in as_completed(futures):
-            score, params = future.result()
-            if score > best:
-                best = score
-                best_params = params
-
-            if best > target_score:
-                break
-
-            future = client.submit(try_and_score, next(param_iter))
-            futures.add(future)
-
-        return self
