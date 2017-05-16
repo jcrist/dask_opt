@@ -19,21 +19,22 @@ from multiprocessing import cpu_count
 import dask
 import dask.array as da
 import toolz as tz
+import numpy as np
 from dask import delayed
 from dask.base import tokenize, Base
 from dask.delayed import Delayed
 from dask.threaded import get as threaded_get
 from dask.utils import derived_from
 from sklearn.metrics.scorer import check_scoring
-from sklearn.model_selection._search import BaseSearchCV
+from sklearn.model_selection._search import BaseSearchCV, _check_param_grid
 from sklearn.utils.metaestimators import if_delegate_has_method
 
 from dask_searchcv._normalize import normalize_estimator
 from dask_searchcv.methods import fit_transform, fit, score, cv_split, cv_extract, \
-    feature_union_concat, feature_union, pipeline
+    feature_union_concat, feature_union, pipeline, cv_n_samples, create_cv_results, fit_best
 from dask_searchcv.utils import to_keys, to_indexable
 from sklearn import model_selection
-from sklearn.base import is_classifier, BaseEstimator, MetaEstimatorMixin
+from sklearn.base import is_classifier, BaseEstimator, MetaEstimatorMixin, clone
 from sklearn.model_selection import LeaveOneGroupOut, LeavePGroupsOut, LeavePOut, LeaveOneOut
 from sklearn.model_selection._split import _CVIterableWrapper, PredefinedSplit, _BaseKFold, \
     BaseShuffleSplit, StratifiedKFold, KFold
@@ -577,7 +578,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
 
-        dsk, X_name, y_name, cv_name, n_splits = oms.build_graph(
+        dsk, X_name, y_name, cv_name, n_splits = build_graph(
             estimator, X, y, self.cv, groups, self.cache_cv)
 
         self.dask_graph_ = dsk
@@ -1076,7 +1077,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
 
-        dsk, X_name, y_name, cv_name, n_splits = oms.build_graph(
+        dsk, X_name, y_name, cv_name, n_splits = build_graph(
             estimator, X, y, self.cv, groups, self.cache_cv)
 
         self.dask_graph_ = dsk
