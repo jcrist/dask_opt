@@ -12,7 +12,6 @@ from dask.base import tokenize, Base
 from dask.delayed import delayed
 from dask.threaded import get as threaded_get
 from dask.utils import derived_from
-from distributed import Client, as_completed
 from sklearn import model_selection
 from sklearn.base import is_classifier, clone, BaseEstimator, MetaEstimatorMixin
 from sklearn.exceptions import NotFittedError
@@ -42,11 +41,9 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
 from .utils import to_indexable, to_keys, unzip
 
 try:
-    from cytoolz import get, pluck, concat
+    from cytoolz import get, pluck
 except:  # pragma: no cover
-    from toolz import get, pluck, concat
-
-import dask_searchcv.online_model_selection as oms
+    from toolz import get, pluck
 
 
 __all__ = ['GridSearchCV', 'RandomizedSearchCV']
@@ -86,16 +83,9 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
         fit_params = {}
 
     fields, tokens, params = normalize_params(candidate_params)
-    main_token = tokenize(normalize_estimator(estimator),  # main token doesn't depend on params
-                          X_name,
-                          y_name,
-                          groups_name,
-                          fit_params,
-                          cv,
-                          error_score == 'raise',
-                          return_train_score)
-
-    param_token = tokenize(fields, params)
+    main_token = tokenize(normalize_estimator(estimator), fields, params,
+                          X_name, y_name, groups_name, fit_params, cv,
+                          error_score == 'raise', return_train_score)
 
     cv_name = 'cv-split-' + main_token
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
@@ -108,21 +98,21 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
         weights = None
 
     scores = do_fit_and_score(dsk, main_token, estimator, cv_name, fields,
-                              tokens, param_token, params, X_name, y_name, fit_params,
+                              tokens, params, X_name, y_name, fit_params,
                               n_splits, error_score, scorer,
                               return_train_score)
 
-    cv_results = 'cv-results-' + main_token + '-' + param_token
-    candidate_params_name = 'cv-parameters-' + main_token + '-' + param_token
+    cv_results = 'cv-results-' + main_token
+    candidate_params_name = 'cv-parameters-' + main_token
     dsk[candidate_params_name] = (decompress_params, fields, params)
     dsk[cv_results] = (create_cv_results, scores, candidate_params_name,
                        n_splits, error_score, weights)
     keys = [cv_results]
 
     if refit:
-        best_params = 'best-params-' + main_token + '-' + param_token
+        best_params = 'best-params-' + main_token
         dsk[best_params] = (get_best_params, candidate_params_name, cv_results)
-        best_estimator = 'best-estimator-' + main_token + '-' + param_token
+        best_estimator = 'best-estimator-' + main_token
         if fit_params:
             fit_params = (dict, (zip, list(fit_params.keys()),
                                 list(pluck(1, fit_params.values()))))
@@ -169,7 +159,7 @@ def _group_fit_params(steps, fit_params):
     return param_lk
 
 
-def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, param_token, params,
+def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
                      X, y, fit_params, n_splits, error_score, scorer,
                      return_train_score):
     if not isinstance(est, Pipeline):
@@ -178,12 +168,11 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, param_token, para
 
         est_type = type(est).__name__.lower()
         est_name = '%s-%s' % (est_type, main_token)
-        score_name = '%s-fit-score-%s-%s' % (est_type, main_token, param_token)
+        score_name = '%s-fit-score-%s' % (est_type, main_token)
         dsk[est_name] = est
 
         seen = {}
         m = 0
-
         out = []
         out_append = out.append
 
@@ -206,14 +195,14 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, param_token, para
         y_train = (cv_extract, cv, X, y, False, True)
         y_test = (cv_extract, cv, X, y, False, False)
 
-        # Fit the estimator on the training data  # todo: refactor for async seen
+        # Fit the estimator on the training data
         X_trains = [X_train] * len(params)
         y_trains = [y_train] * len(params)
-        fit_ests = do_fit(dsk, TokenIterator(main_token+'-'+param_token), est, cv,
+        fit_ests = do_fit(dsk, TokenIterator(main_token), est, cv,
                           fields, tokens, params, X_trains, y_trains,
                           fit_params, n_splits, error_score)
 
-        score_name = 'score-' + main_token + '-' + param_token
+        score_name = 'score-' + main_token
 
         scores = []
         scores_append = scores.append
@@ -250,8 +239,6 @@ def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
         est_type = type(est).__name__.lower()
         est_name = '%s-%s' % (est_type, token)
         fit_name = '%s-fit-%s' % (est_type, token)
-        # this doesn't depend on the params yet
-        # we need to create the key out of the accumulated names in the parameter/estimator tree
         dsk[est_name] = est
 
         seen = {}
@@ -291,7 +278,7 @@ def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             fields = None
 
         name = type(est).__name__.lower()
-        token = next_token(est)  # todo: involve the parameters in the name ...
+        token = next_token(est)
         fit_Xt_name = '%s-fit-transform-%s' % (name, token)
         fit_name = '%s-fit-%s' % (name, token)
         Xt_name = '%s-transform-%s' % (name, token)
@@ -363,7 +350,7 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
         new_Xs = {}
         est_index = field_to_index[step_name]
 
-        for ids in _group_ids_by_index(est_index, tokens):  # iterating over all param versions for this step
+        for ids in _group_ids_by_index(est_index, tokens):
             # Get the estimator for this subgroup
             sub_est = params[ids[0]][est_index]
             if sub_est is MISSING:
@@ -434,7 +421,6 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
     return (fits, Xs) if is_transform else (fits, None)
 
 
-# this is the important one to append info to
 def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                  fit_params, n_splits, error_score, is_transform):
     if 'steps' in fields:
@@ -448,7 +434,6 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     instrs.append((est.steps[-1], is_transform))
 
     fit_steps = []
-    # we want to separate all of the parameters out - generating keys only for used parameters
     for (step_name, step), transform in instrs:
         fits, Xs = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
                                 params, Xs, ys, fit_params, n_splits,
@@ -774,7 +759,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                              % self.best_estimator_)
         return self.scorer_(self.best_estimator_, X, y)
 
-    def fit(self, X, y=None, groups=None, block=False, **fit_params):
+    def fit(self, X, y=None, groups=None, **fit_params):
         """Run fit with all sets of parameters.
 
         Parameters
@@ -799,53 +784,27 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
 
-        dsk, X_name, y_name, cv_name, n_splits = oms.build_graph(
-            estimator, X, y, self.cv, groups, self.cache_cv)
-
+        dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
+                                          list(self._get_param_iterator()),
+                                          X, y, groups, fit_params,
+                                          iid=self.iid,
+                                          refit=self.refit,
+                                          error_score=error_score,
+                                          return_train_score=self.return_train_score,
+                                          cache_cv=self.cache_cv)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
-
-        fit_params = oms._persist_fit_params(dsk, fit_params)
-
-        # populate the graph with jobs
-        keys, params_list = [], []
-        for params in self._get_param_iterator():
-            cv_score_names = oms.update_graph(dsk, estimator, X_name, y_name, params, fit_params,
-                                          cv_name, n_splits,
-                                          self.scorer_, self.return_train_score,
-                                          error_score=error_score)
-            keys.append(cv_score_names)
-            params_list.append(params)
 
         n_jobs = _normalize_n_jobs(self.n_jobs)
         scheduler = _normalize_scheduler(self.scheduler, n_jobs)
 
-        scores = scheduler(dsk, keys, num_workers=n_jobs)
-        scores = tuple(concat(zip(*scores)))  # fixme: ugly hack for the moment to compare
+        out = scheduler(dsk, keys, num_workers=n_jobs)
 
-        if self.iid:
-            weights_name = 'cv-n-samples-' + tokenize(
-                normalize_estimator(estimator), X_name, y_name, params, fit_params,
-                cv_name, n_splits)
-            oms.update_dsk(dsk, weights_name, (cv_n_samples, cv_name))
-            weights = scheduler(dsk, weights_name)
-        else:
-            weights = None
-
-        self.cv_results_ = results = create_cv_results(
-            scores, params_list, n_splits, error_score, weights=weights
-        )
-
+        self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
 
         if self.refit:
-            best_params = results['params'][self.best_index_]
-            # we do this locally (should be possible by key (from fit_name)):
-            token = tokenize(normalize_estimator(estimator), best_params, X_name, y_name, fit_params)
-            best_fit_key = 'best-fit-{}'.format(token)
-            dsk[best_fit_key] = (fit_best, clone(estimator), best_params, X_name, y_name, fit_params)
-            self.best_estimator_ = scheduler(dsk, best_fit_key)
-
+            self.best_estimator_ = out[1]
         return self
 
     def visualize(self, filename='mydask', format=None, **kwargs):

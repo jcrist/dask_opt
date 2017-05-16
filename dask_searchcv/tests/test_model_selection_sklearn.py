@@ -92,10 +92,9 @@ def test_hyperparameter_searcher_with_fit_params(cls, kwargs):
     assert "Expected fit parameter(s) ['eggs'] not seen." in str(exc.value)
 
     searcher.fit(X, y, clf__spam=np.ones(10), clf__eggs=np.zeros(10))
-
-    # todo: fix this test
     # Test with dask objects as parameters
-    searcher.fit(X, y, clf__spam=da.ones(10, chunks=2), clf__eggs=dask.delayed(np.zeros(10)))
+    searcher.fit(X, y, clf__spam=da.ones(10, chunks=2),
+                 clf__eggs=dask.delayed(np.zeros(10)))
 
 
 @ignore_warnings

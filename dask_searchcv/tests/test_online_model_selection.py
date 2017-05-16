@@ -8,9 +8,8 @@ from sklearn.pipeline import Pipeline
 
 from dask_searchcv._normalize import normalize_estimator
 from dask_searchcv.methods import feature_union_concat
-from dask_searchcv.model_selection import _normalize_scheduler
 from dask_searchcv.online_model_selection import do_fit, do_pipeline, \
-    do_fit_transform, flesh_out_params, update_dsk
+    do_fit_transform, flesh_out_params, update_dsk, _normalize_scheduler
 from dask_searchcv.utils import to_keys
 
 loglevel = pytest.config.getoption("--log", 'INFO')
