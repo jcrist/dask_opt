@@ -102,10 +102,11 @@ if __name__ == '__main__':
 
     model = SVC(kernel='rbf')
 
-    n_splits = 3
-    param_space = {'C': np.linspace(0.00001, 1),
-                   'gamma': stats.expon(0.00001, 1),
+    # ended up tuning these parameters a bit :-P
+    param_space = {'C': stats.expon(0.00001, 20),
+                   'gamma': stats.expon(0.00001, 0.5),
                    'class_weight': [None, 'balanced']}
+
     n_splits = 3
     n_iter = 100000
     random_state = 1
