@@ -61,8 +61,8 @@ class TokenIterator(object):
 
 
 class ParamTokenIterator(object):
-    """Keeps a record of seen parameters for each step and assigns a count (makes the graph easier
-    to look at)"""
+    """Keeps a record of seen parameters for each step and assigns a count (makes 
+    the graph easier to look at)"""
     def __init__(self):
         self.counts = defaultdict(int)
         self.all_tokens = {}
