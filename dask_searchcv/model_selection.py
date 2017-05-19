@@ -61,13 +61,17 @@ class TokenIterator(object):
 
 
 class ParamTokenIterator(object):
+    """Keeps a record of seen parameters for each step and assigns a count (makes the graph easier
+    to look at)"""
     def __init__(self):
         self.counts = defaultdict(int)
+        self.all_tokens = {}
 
     def __call__(self, main_token, *tokens):
-        c = self.counts[main_token]
-        self.counts[main_token] += 1
-        return c
+        if tokenize(main_token, *tokens) not in self.all_tokens:
+            self.counts[main_token] += 1
+
+        return self.counts[main_token]
 
 
 def build_graph(estimator, cv, X, y=None,
@@ -126,7 +130,7 @@ def update_graph(dsk, next_param_token, next_token, estimator, cv_name,
 def generate_results(dsk, estimator, scores, main_token, X_name, y_name, all_params,
                      n_splits, error_score, weights, refit, fit_params):
 
-    # fixme: ugly hack to compare with previous ordering of scores
+    # fixme: temporary hack to compare with previous ordering of scores
     scores = list(concat(zip(*concat(zip(partition(n_splits, scores))))))
 
     cv_results = 'cv-results-' + main_token
