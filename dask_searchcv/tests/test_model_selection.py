@@ -5,18 +5,16 @@ import pickle
 from itertools import product
 from multiprocessing import cpu_count
 
-import pytest
-import numpy as np
-import pandas as pd
-
 import dask
 import dask.array as da
+import numpy as np
+import pandas as pd
+import pytest
 from dask.base import tokenize
 from dask.callbacks import Callback
 from dask.delayed import delayed
 from dask.threaded import get as get_threading
 from dask.utils import tmpdir
-
 from sklearn.datasets import make_classification, load_iris
 from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError, FitFailedWarning
@@ -39,10 +37,11 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.svm import SVC
 
 import dask_searchcv as dcv
+from dask_searchcv.methods import CVCache
 from dask_searchcv.model_selection import (compute_n_splits, check_cv,
                                            _normalize_n_jobs, _normalize_scheduler,
-                                           ParamTokenIterator, normalize_params)
-from dask_searchcv.methods import CVCache
+                                           ParamTokenIterator, normalize_params,
+                                           build_graph, update_graph)
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
                                       ignore_warnings)
@@ -617,14 +616,78 @@ def test_scheduler_param_bad(loop):
 
 def test_param_iterator():
     param_iter = ParamTokenIterator()
+    # uses:
+    # m = next_param_token(tuple(fields), t)
+    # m = next_param_token('do_fit_transform', X, y, t)
+    # m = next_param_token('_do_pipeline', name, steps)
+    # m = next_param_token('feature-union', steps, Xs, wt)
 
     fields, tokens, params = normalize_params([{'k': 1}, {'k': 2}])
 
-    assert param_iter('step_name', tokens[0]) == 1
-    assert param_iter('step_name', tokens[0]) == 1
+    assert param_iter('step_name', tokens[0]) == 0
+    assert param_iter('step_name', tokens[0]) == 0
+    assert param_iter('step_name', tokens[1]) == 1
+    assert param_iter('step_name', tokens[1]) == 1
+    assert param_iter('step_name', tokens[0]) == 0
 
-    assert param_iter('step_name', tokens[1]) == 2
-    assert param_iter('step_name', tokens[1]) == 2
 
+def test_build_and_update_graph():
+    """Build, then update(p[:len(p//2)]), then update(p[len(p//2):]) should be
+     equivalent to build, then update(params[:])"""
 
+    pipeline = Pipeline([
+        ('transform', ScalingTransformer()),
+        ('svc', SVC(kernel='linear', random_state=0)),
+    ])
 
+    cv = 3
+    X, y = make_classification()
+
+    error_score = 'raise',
+    return_train_score = True
+    scorer = None
+
+    (dsk, cv_name, X_name, y_name, n_splits, fit_params, weights,
+     next_param_token, next_token) = build_graph(
+        pipeline, cv, X, y,
+        groups=None, fit_params={},
+        iid=True,
+        error_score=error_score,
+        return_train_score=return_train_score,
+        cache_cv=True)
+
+    assert isinstance(dsk, dict)  # etc, ...
+
+    param_space = [{'svc__C': 1.0}, {'svc__C': 2.0}, {'svc__C': 3.0},
+                   {'svc__C': 4.0}]
+
+    scores1 = update_graph(dsk, next_param_token, next_token, pipeline,
+                           cv_name,
+                           X_name, y_name, param_space[:2], fit_params, n_splits,
+                           error_score, scorer, return_train_score)
+
+    scores2 = update_graph(dsk, next_param_token, next_token, pipeline,
+                           cv_name,
+                           X_name, y_name, param_space[2:], fit_params, n_splits,
+                           error_score, scorer, return_train_score)
+
+    (dsk2, cv_name, X_name, y_name, n_splits, fit_params, weights,
+     next_param_token, next_token) = build_graph(
+        pipeline, cv, X, y,
+        groups=None, fit_params={},
+        iid=True,
+        error_score=error_score,
+        return_train_score=return_train_score,
+        cache_cv=True)
+
+    scores_full = update_graph(dsk2, next_param_token, next_token, pipeline,
+                           cv_name,
+                           X_name, y_name, param_space, fit_params, n_splits,
+                           error_score, scorer, return_train_score)
+
+    # [(name, m, n)] is sorted by m (parameters) so ordering is not the same
+    assert set(scores_full) == set(scores1 + scores2)
+
+    assert len(dsk) == len(dsk2)
+
+    # todo: some more specific assertions here

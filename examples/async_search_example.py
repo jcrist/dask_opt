@@ -1,4 +1,5 @@
 import numbers
+from collections import defaultdict
 
 import numpy as np
 import toolz as tz
@@ -11,7 +12,8 @@ from sklearn.metrics.scorer import check_scoring
 from sklearn.svm import SVC
 
 from dask_searchcv.model_selection import build_graph, \
-    update_graph, DaskBaseSearchCV, generate_results, _normalize_n_jobs, _normalize_scheduler
+    update_graph, DaskBaseSearchCV, generate_results, _normalize_n_jobs, _normalize_scheduler, \
+    TokenIterator
 
 
 # note: could probably include other information in this via a results dict/object containing
@@ -77,6 +79,9 @@ class AsyncRandomizedSearchCV(DaskBaseSearchCV):
         self._job_map = {}
 
         for p in candidate_params:
+            # next_token needs to be reset
+            # next_token = TokenIterator(main_token)
+            next_token.counts = defaultdict(int)
             cv_scores = update_graph(dsk, next_param_token, next_token, estimator,
                                      cv_name,
                                      X_name, y_name, [p], fit_params,
