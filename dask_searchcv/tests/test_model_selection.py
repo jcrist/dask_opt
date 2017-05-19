@@ -40,7 +40,8 @@ from sklearn.svm import SVC
 
 import dask_searchcv as dcv
 from dask_searchcv.model_selection import (compute_n_splits, check_cv,
-        _normalize_n_jobs, _normalize_scheduler)
+                                           _normalize_n_jobs, _normalize_scheduler,
+                                           ParamTokenIterator, normalize_params)
 from dask_searchcv.methods import CVCache
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
@@ -612,3 +613,18 @@ def test_scheduler_param_distributed(loop):
 def test_scheduler_param_bad(loop):
     with pytest.raises(ValueError):
         _normalize_scheduler('threeding', 4, loop)
+
+
+def test_param_iterator():
+    param_iter = ParamTokenIterator()
+
+    fields, tokens, params = normalize_params([{'k': 1}, {'k': 2}])
+
+    assert param_iter('step_name', tokens[0]) == 1
+    assert param_iter('step_name', tokens[0]) == 1
+
+    assert param_iter('step_name', tokens[1]) == 2
+    assert param_iter('step_name', tokens[1]) == 2
+
+
+

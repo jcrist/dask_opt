@@ -65,11 +65,13 @@ class ParamTokenIterator(object):
     the graph easier to look at)"""
     def __init__(self):
         self.counts = defaultdict(int)
-        self.all_tokens = {}
+        self.all_tokens = set()
 
     def __call__(self, main_token, *tokens):
-        if tokenize(main_token, *tokens) not in self.all_tokens:
+        t = tokenize(main_token, *tokens)
+        if t not in self.all_tokens:
             self.counts[main_token] += 1
+            self.all_tokens.add(t)
 
         return self.counts[main_token]
 
@@ -211,6 +213,7 @@ def do_fit_and_score(dsk, next_param_token, next_token, est, cv, fields, tokens,
         out_append = out.append
 
         for t, p in zip(tokens, params):
+            # this is a bit weird, we're assuming sorted fields:
             m = next_param_token(tuple(fields), t)
             for n, fit_params in n_and_fit_params:
                 dsk[(score_name, m, n)] = (fit_and_score, est_name, cv,
