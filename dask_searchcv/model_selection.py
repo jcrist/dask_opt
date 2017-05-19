@@ -813,9 +813,10 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         scores = []
         all_params = []
         for params in self._get_param_iterator():
-            # next_token.counts = defaultdict(int)  # reset TokenIterator
             candidate_params = [params]
             all_params.extend(candidate_params)
+
+            next_token.counts = defaultdict(int)  # reset TokenIterator
             scores_ = update_graph(dsk, next_param_token, next_token, estimator,
                                        cv_name,
                          X_name, y_name, candidate_params, fit_params, n_splits,

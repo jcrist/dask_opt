@@ -10,6 +10,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
+from collections import defaultdict
 from dask.base import tokenize
 from dask.callbacks import Callback
 from dask.delayed import delayed
@@ -358,15 +359,17 @@ def test_pipeline_sub_estimators():
                      ('scaling', scaling),
                      ('svc', SVC(kernel='linear', random_state=0))])
 
-    param_grid = [{'svc__C': [0.1, 0.1]},  # Duplicates to test culling
-                  {'setup': [None],
-                   'svc__C': [0.1, 1, 10],
-                   'scaling': [ScalingTransformer(), None]},
+    param_grid = [
+                  # {'svc__C': [0.1, 0.1]},  # Duplicates to test culling
+                  # {'setup': [None],
+                  #  'svc__C': [0.1, 1, 10],
+                  #  'scaling': [ScalingTransformer(), None]},
                   {'setup': [SelectKBest()],
                    'setup__k': [1, 2],
                    'svc': [SVC(kernel='linear', random_state=0, C=0.1),
-                           SVC(kernel='linear', random_state=0, C=1),
-                           SVC(kernel='linear', random_state=0, C=10)]}]
+                           SVC(kernel='linear', random_state=0, C=1.),
+                           SVC(kernel='linear', random_state=0, C=10)]
+                   }]
 
     gs = GridSearchCV(pipe, param_grid=param_grid)
     gs.fit(X, y)
@@ -622,16 +625,31 @@ def test_param_iterator():
     # m = next_param_token('_do_pipeline', name, steps)
     # m = next_param_token('feature-union', steps, Xs, wt)
 
-    fields, tokens, params = normalize_params([{'k': 1}, {'k': 2}])
+    fields, tokens, params = normalize_params(
+        [{'k': 1}, {'k': 2}, {'k': None}, {'k': (None, None)}])
 
     assert param_iter('step_name', tokens[0]) == 0
     assert param_iter('step_name', tokens[0]) == 0
     assert param_iter('step_name', tokens[1]) == 1
     assert param_iter('step_name', tokens[1]) == 1
     assert param_iter('step_name', tokens[0]) == 0
+    assert param_iter('step_name', tokens[2]) == 2
+    assert param_iter('step_name', tokens[3]) == 3
+    assert param_iter('step_name', tokens[3]) == 3
 
 
-def test_build_and_update_graph():
+@pytest.mark.parametrize('param_grid', [
+    [  # duplicates solved by resetting next_token between updates
+        {'svc__C': 1.0}, {'svc__C': 2.0}, {'svc__C': 3.0}, {'svc__C': 4.0}
+    ],
+    [  # however, sub-estimators in separate updates get clobbered
+        {'svc__C': 1.0},
+        {'svc': SVC(kernel='linear', C=2.0, random_state=0)},
+        {'svc__C': 3.0},
+        {'svc': SVC(kernel='linear', C=3.0, random_state=0)},
+    ]
+])
+def test_build_and_update_graph(param_grid):
     """Build, then update(p[:len(p//2)]), then update(p[len(p//2):]) should be
      equivalent to build, then update(params[:])"""
 
@@ -658,17 +676,17 @@ def test_build_and_update_graph():
 
     assert isinstance(dsk, dict)  # etc, ...
 
-    param_space = [{'svc__C': 1.0}, {'svc__C': 2.0}, {'svc__C': 3.0},
-                   {'svc__C': 4.0}]
-
     scores1 = update_graph(dsk, next_param_token, next_token, pipeline,
                            cv_name,
-                           X_name, y_name, param_space[:2], fit_params, n_splits,
+                           X_name, y_name, param_grid[:2], fit_params, n_splits,
                            error_score, scorer, return_train_score)
+
+    # we reset the default iterator between updates to avoid duplicate keys
+    next_token.counts = defaultdict(int)
 
     scores2 = update_graph(dsk, next_param_token, next_token, pipeline,
                            cv_name,
-                           X_name, y_name, param_space[2:], fit_params, n_splits,
+                           X_name, y_name, param_grid[2:], fit_params, n_splits,
                            error_score, scorer, return_train_score)
 
     (dsk2, cv_name, X_name, y_name, n_splits, fit_params, weights,
@@ -681,13 +699,13 @@ def test_build_and_update_graph():
         cache_cv=True)
 
     scores_full = update_graph(dsk2, next_param_token, next_token, pipeline,
-                           cv_name,
-                           X_name, y_name, param_space, fit_params, n_splits,
-                           error_score, scorer, return_train_score)
+                               cv_name,
+                               X_name, y_name, param_grid, fit_params, n_splits,
+                               error_score, scorer, return_train_score)
 
     # [(name, m, n)] is sorted by m (parameters) so ordering is not the same
     assert set(scores_full) == set(scores1 + scores2)
 
     assert len(dsk) == len(dsk2)
+    assert set(dsk.keys()) == set(dsk2.keys())
 
-    # todo: some more specific assertions here
