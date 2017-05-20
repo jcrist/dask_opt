@@ -267,7 +267,7 @@ def do_fit(dsk, next_param_token, next_token, est, cv, fields, tokens, params, X
             params = tokens = repeat(None)
             fields = None
 
-        token = next_token(est)
+        token = tokenize(est)  # next_token(est)  # fix something like this ?
         est_type = type(est).__name__.lower()
         est_name = '%s-%s' % (est_type, token)
         fit_name = '%s-fit-%s' % (est_type, token)
@@ -279,7 +279,7 @@ def do_fit(dsk, next_param_token, next_token, est, cv, fields, tokens, params, X
         for X, y, t, p in zip(Xs, ys, tokens, params):
             # should we include the fit_name in tokens here?
             # ... this is probably causing failures
-            m = next_param_token('do_fit', X, y, t)
+            m = next_param_token('do_fit', fit_name, X, y, t)
             for n, fit_params in n_and_fit_params:
                 dsk[(fit_name, m, n)] = (fit, est_name, X + (n,),
                                          y + (n,), error_score,

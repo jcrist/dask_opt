@@ -360,16 +360,16 @@ def test_pipeline_sub_estimators():
                      ('svc', SVC(kernel='linear', random_state=0))])
 
     param_grid = [
-                  # {'svc__C': [0.1, 0.1]},  # Duplicates to test culling
-                  # {'setup': [None],
-                  #  'svc__C': [0.1, 1, 10],
-                  #  'scaling': [ScalingTransformer(), None]},
-                  {'setup': [SelectKBest()],
-                   'setup__k': [1, 2],
-                   'svc': [SVC(kernel='linear', random_state=0, C=0.1),
-                           SVC(kernel='linear', random_state=0, C=1.),
-                           SVC(kernel='linear', random_state=0, C=10)]
-                   }]
+        {'svc__C': [0.1, 0.1]},  # Duplicates to test culling
+        {'setup': [None],
+         'svc__C': [0.1, 1, 10],
+         'scaling': [ScalingTransformer(), None]},
+        {'setup': [SelectKBest()],
+         'setup__k': [1, 2],
+         'svc': [SVC(kernel='linear', random_state=0, C=0.1),
+                 SVC(kernel='linear', random_state=0, C=1.),
+                 SVC(kernel='linear', random_state=0, C=10)]
+         }]
 
     gs = GridSearchCV(pipe, param_grid=param_grid)
     gs.fit(X, y)
@@ -708,4 +708,3 @@ def test_build_and_update_graph(param_grid):
 
     assert len(dsk) == len(dsk2)
     assert set(dsk.keys()) == set(dsk2.keys())
-
