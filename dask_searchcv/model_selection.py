@@ -277,9 +277,7 @@ def do_fit(dsk, next_param_token, next_token, est, cv, fields, tokens, params, X
         out_append = out.append
 
         for X, y, t, p in zip(Xs, ys, tokens, params):
-            # should we include the fit_name in tokens here?
-            # ... this is probably causing failures
-            m = next_param_token('do_fit', fit_name, X, y, t)
+            m = next_param_token('do_fit' + tokenize(fit_name), fit_name, X, y, t)
             for n, fit_params in n_and_fit_params:
                 dsk[(fit_name, m, n)] = (fit, est_name, X + (n,),
                                          y + (n,), error_score,
@@ -318,7 +316,8 @@ def do_fit_transform(dsk, next_param_token, next_token, est, cv, fields, tokens,
         out_append = out.append
 
         for X, y, t, p in zip(Xs, ys, tokens, params):
-            m = next_param_token('do_fit_transform', X, y, t)
+            m = next_param_token(
+                'do_fit_transform' + tokenize(fit_name), fit_name, X, y, t)
             for n, fit_params in n_and_fit_params:
                 dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
                                             X + (n,), y + (n,),

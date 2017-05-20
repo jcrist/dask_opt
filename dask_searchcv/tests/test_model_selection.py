@@ -624,6 +624,7 @@ def test_param_iterator():
     # m = next_param_token('do_fit_transform', X, y, t)
     # m = next_param_token('_do_pipeline', name, steps)
     # m = next_param_token('feature-union', steps, Xs, wt)
+    # m = next_param_token('do_fit', fit_name, X, y, t)
 
     fields, tokens, params = normalize_params(
         [{'k': 1}, {'k': 2}, {'k': None}, {'k': (None, None)}])
@@ -690,7 +691,7 @@ def test_build_and_update_graph(param_grid):
                            error_score, scorer, return_train_score)
 
     (dsk2, cv_name, X_name, y_name, n_splits, fit_params, weights,
-     next_param_token, next_token) = build_graph(
+     next_param_token2, next_token) = build_graph(
         pipeline, cv, X, y,
         groups=None, fit_params={},
         iid=True,
@@ -698,7 +699,7 @@ def test_build_and_update_graph(param_grid):
         return_train_score=return_train_score,
         cache_cv=True)
 
-    scores_full = update_graph(dsk2, next_param_token, next_token, pipeline,
+    scores_full = update_graph(dsk2, next_param_token2, next_token, pipeline,
                                cv_name,
                                X_name, y_name, param_grid, fit_params, n_splits,
                                error_score, scorer, return_train_score)
@@ -707,4 +708,5 @@ def test_build_and_update_graph(param_grid):
     assert set(scores_full) == set(scores1 + scores2)
 
     assert len(dsk) == len(dsk2)
+
     assert set(dsk.keys()) == set(dsk2.keys())

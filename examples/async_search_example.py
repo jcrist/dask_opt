@@ -12,8 +12,7 @@ from sklearn.metrics.scorer import check_scoring
 from sklearn.svm import SVC
 
 from dask_searchcv.model_selection import build_graph, \
-    update_graph, DaskBaseSearchCV, generate_results, _normalize_n_jobs, _normalize_scheduler, \
-    TokenIterator
+    update_graph, DaskBaseSearchCV, generate_results, _normalize_n_jobs
 
 
 # note: could probably include other information in this via a results dict/object containing
