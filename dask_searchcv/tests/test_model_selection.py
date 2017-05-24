@@ -396,6 +396,7 @@ def check_scores_all_nan(gs, bad_param):
                FailingClassifier.FAILING_PARAMETER)
 
 
+@ignore_warnings
 @pytest.mark.parametrize('weights',
         [None, (None, {'tr0': 2, 'tr2': 3}, {'tr0': 2, 'tr2': 4})])
 def test_feature_union(weights):
