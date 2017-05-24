@@ -603,12 +603,13 @@ def test_scheduler_param(scheduler, n_jobs, get):
 @pytest.mark.skipif('not has_distributed')
 def test_scheduler_param_distributed(loop):
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
-    gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]}, cv=3)
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop):
+        with Client(s['address'], loop=loop, set_as_default=False) as client:
+            gs = dcv.GridSearchCV(MockClassifier(), {'foo_param': [0, 1, 2]},
+                                  cv=3, scheduler=client)
             gs.fit(X, y)
 
 
-def test_scheduler_param_bad(loop):
+def test_scheduler_param_bad():
     with pytest.raises(ValueError):
-        _normalize_scheduler('threeding', 4, loop)
+        _normalize_scheduler('threeding', 4)
