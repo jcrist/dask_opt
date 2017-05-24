@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import pickle
+import warnings
 from itertools import product
 from multiprocessing import cpu_count
 
@@ -396,7 +397,6 @@ def check_scores_all_nan(gs, bad_param):
                FailingClassifier.FAILING_PARAMETER)
 
 
-@ignore_warnings
 @pytest.mark.parametrize('weights',
         [None, (None, {'tr0': 2, 'tr2': 3}, {'tr0': 2, 'tr2': 4})])
 def test_feature_union(weights):
@@ -435,7 +435,9 @@ def test_feature_union(weights):
 
     pipe = Pipeline([('union', union), ('est', CheckXClassifier())])
     gs = dcv.GridSearchCV(pipe, grid, refit=False, cv=2)
-    gs.fit(X, y)
+
+    with warnings.catch_warnings(record=True):
+        gs.fit(X, y)
 
 
 @ignore_warnings
