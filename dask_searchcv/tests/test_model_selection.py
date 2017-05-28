@@ -677,18 +677,16 @@ def test_build_and_update_graph(param_grid):
 
     assert isinstance(dsk, dict)  # etc, ...
 
-    scores1 = update_graph(dsk, next_param_token, next_token, pipeline,
-                           cv_name,
-                           X_name, y_name, param_grid[:2], fit_params, n_splits,
-                           error_score, scorer, return_train_score)
+    scores1 = update_graph(dsk, next_param_token, next_token, pipeline, cv_name,
+                           X_name, y_name, fit_params, n_splits,
+                           error_score, scorer, return_train_score, param_grid[:2])
 
     # we reset the default iterator between updates to avoid duplicate keys
     next_token.counts = defaultdict(int)
 
-    scores2 = update_graph(dsk, next_param_token, next_token, pipeline,
-                           cv_name,
-                           X_name, y_name, param_grid[2:], fit_params, n_splits,
-                           error_score, scorer, return_train_score)
+    scores2 = update_graph(dsk, next_param_token, next_token, pipeline, cv_name,
+                           X_name, y_name, fit_params, n_splits,
+                           error_score, scorer, return_train_score, param_grid[2:])
 
     (dsk2, cv_name, X_name, y_name, n_splits, fit_params, weights,
      next_param_token2, next_token) = build_graph(
@@ -700,9 +698,9 @@ def test_build_and_update_graph(param_grid):
         cache_cv=True)
 
     scores_full = update_graph(dsk2, next_param_token2, next_token, pipeline,
-                               cv_name,
-                               X_name, y_name, param_grid, fit_params, n_splits,
-                               error_score, scorer, return_train_score)
+                               cv_name, X_name, y_name, fit_params,
+                               n_splits, error_score, scorer, return_train_score,
+                               param_grid)
 
     # [(name, m, n)] is sorted by m (parameters) so ordering is not the same
     assert set(scores_full) == set(scores1 + scores2)

@@ -117,20 +117,22 @@ def build_graph(estimator, cv, X, y=None,
     )
 
 
-def update_graph(dsk, next_param_token, next_token, estimator, cv_name,
-                 X_name, y_name, candidate_params, fit_params, n_splits, error_score,
-                 scorer, return_train_score):
+def update_graph(dsk, next_param_token, next_token, estimator, cv_name, X_name,
+                 y_name, fit_params, n_splits, error_score, scorer,
+                 return_train_score, candidate_params):
+    """Returns a a list of lists: cv-scores for each parameter sample"""
     fields, tokens, params = normalize_params(candidate_params)
     scores = do_fit_and_score(dsk, next_param_token, next_token, estimator, cv_name,
                               fields, tokens, params, X_name, y_name, fit_params,
                               n_splits, error_score, scorer, return_train_score)
+
     return scores
 
 
 def generate_results(dsk, estimator, scores, main_token, X_name, y_name, all_params,
                      n_splits, error_score, weights, refit, fit_params):
 
-    # fixme: temporary hack to compare with previous ordering of scores
+    # fixme: complicated, to compare with previous ordering of scores
     scores = list(concat(zip(*concat(zip(partition(n_splits, scores))))))
 
     cv_results = 'cv-results-' + main_token
@@ -817,9 +819,9 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
             next_token.counts = defaultdict(int)  # reset TokenIterator
             scores_ = update_graph(dsk, next_param_token, next_token, estimator,
-                                       cv_name,
-                         X_name, y_name, candidate_params, fit_params, n_splits,
-                         error_score, self.scorer_, self.return_train_score)
+                                   cv_name, X_name, y_name, fit_params, n_splits,
+                                   error_score, self.scorer_,
+                                   self.return_train_score, candidate_params)
             scores.extend(scores_)
 
         main_token = next_token.token
