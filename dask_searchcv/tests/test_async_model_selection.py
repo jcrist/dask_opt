@@ -1,20 +1,11 @@
-import time
-
-from distributed import Client
-from scipy import stats
 from sklearn.datasets import load_digits
-from sklearn.svm import SVC
-
-from dask_searchcv.async_model_selection import AsyncRandomizedSearchCV
 
 
-if __name__ == '__main__':
-    import logging
+def test_criterion():
+    criterion = Criterion()
 
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s',
-                        datefmt='%Y/%m/%d %I:%M:%S')
 
+def test_async_searchcv():
     digits = load_digits()
 
     model = SVC(kernel='rbf')
@@ -51,3 +42,4 @@ if __name__ == '__main__':
     print("best_score {}; best_params - {}".format(search.best_score_,
                                                    search.best_params_))
     print("Async fit took {:.3f} seconds".format(time.time()-start_t))
+
