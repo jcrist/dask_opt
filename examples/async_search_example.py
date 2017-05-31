@@ -35,7 +35,8 @@ if __name__ == '__main__':
         cv=n_splits,
         n_iter=n_iter,
         random_state=random_state,
-        client=client
+        client=client,
+        threshold=0.6
     )
 
     X = digits.data

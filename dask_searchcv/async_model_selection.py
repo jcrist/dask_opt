@@ -1,10 +1,13 @@
+import abc
 import numbers
 from collections import defaultdict
 
 import numpy as np
+import time
 import toolz as tz
+import operator as op
 from dask.delayed import tokenize, Delayed
-from distributed import Client, as_completed
+from distributed import Client, as_completed, wait
 from sklearn import model_selection
 from sklearn.metrics.scorer import check_scoring
 
@@ -23,12 +26,17 @@ def _objective(*cv_scores):
         return np.mean(cv_scores)
 
 
+class CriterionReached(BaseException):
+    """Stopping criterion for search has been reached"""
+
+
+# todo: find a way to use the threaded/... verions of scheduler with compute
 class AsyncSearchCV(DaskBaseSearchCV):
-    def __init__(self, estimator,
-                 scoring=None, iid=True, refit=True, cv=None,
-                 error_score='raise', threshold=0.9,
+    def __init__(self, estimator, scoring=None,
+                 iid=True, refit=True, cv=None,
+                 error_score='raise',
                  return_train_score=True, scheduler=None, n_jobs=-1,
-                 cache_cv=True):
+                 cache_cv=True, client=None):
         super(AsyncSearchCV, self).__init__(
             estimator=estimator,
             scoring=scoring, iid=iid,
@@ -39,10 +47,25 @@ class AsyncSearchCV(DaskBaseSearchCV):
             n_jobs=n_jobs,
             cache_cv=cache_cv,
         )
-        self._threshold = threshold
+        if client is None:
+            client = Client()
+        self._client = client
+        self._job_map = {}
 
-    def _criterion(self, scores):
-        return max(scores) > self._threshold
+    @abc.abstractmethod
+    def _parameter_sampler(self, params, scores, timestamps):
+        """Sample new parameters according to previous results with timestamps
+
+        Args:
+            params: list of parameter dicts
+            scores: list of float scores
+            timestamps: list of float timestamps
+
+        Returns:
+            new parameter dict for self._estimator
+
+        """
+        pass
 
     def fit_async(self, X, y=None, groups=None, **fit_params):
         if not (isinstance(self.error_score, numbers.Number) or
@@ -68,69 +91,68 @@ class AsyncSearchCV(DaskBaseSearchCV):
 
         def _update_graph_with_objective_scores(params):
             scores = _update_graph(params)
-            scores = list(tz.groupby(1, scores).values())
+            scores = [v for i, v in
+                      sorted(tz.groupby(1, scores).items(), key=op.itemgetter(0))]
             objective_scores = [
                 'objective-score-{}'.format(tokenize(*v)) for v in scores]
             for name, v in zip(objective_scores, scores):
                 dsk[name] = (_objective,) + tuple(v)
-            return list(tz.concat(scores)), objective_scores
+            return scores, objective_scores
 
         # fill cluster with jobs
-        params_iter = iter(self._get_param_iterator())
-        candidate_params = [next(params_iter) for _ in range(int(ncores * 2))]
+        candidate_params = [self._parameter_sampler(None, None, None) for _ in
+                            range(int(ncores * 2))]
 
         next_token.counts = defaultdict(int)
         cv_scores, obj_scores = _update_graph_with_objective_scores(candidate_params)
+
         fs = [self._client.compute(Delayed(k, dsk)) for k in obj_scores]
         self._job_map = {k: f for k, f in zip(fs, candidate_params)}
 
         af = as_completed(fs)
-        all_params, all_scores = candidate_params, cv_scores
-        obj_scores = []
-        best_score = -np.inf
+
+        score_map = {k: s for k, s in zip(fs, cv_scores)}
+        obj_scores, timestamps = {}, {}
+        completed = []  # to keep ordering
 
         # adding jobs as completed
         for future in af:
             params, obj_score = self._job_map[future], future.result()
-            logger.debug(
-                "Current score {} for parameters: {}".format(obj_score, params))
-            if obj_score > best_score:
-                logger.info(
-                    "Best score {} for parameters: {}".format(obj_score, params))
-                best_score = obj_score
+            completed.append(future)
+            timestamps[future] = time.time()
+            obj_scores[future] = obj_score
 
-            obj_scores.append(obj_score)
-
-            # select new parameters if criterion not met, else break
-            if self._criterion(scores=obj_scores):
-                # we cancel the remaining jobs
-                logger.info("Criterion met, cleaning up jobs")
-                nleft = len(af.futures)
+            try:
+                p = self._parameter_sampler(
+                    [self._job_map[f] for f in completed],
+                    [obj_scores[f] for f in completed],
+                    [timestamps[f] for f in completed]
+                )
+            except CriterionReached:
                 for f in af.futures:
                     del self._job_map[f]
+                    del score_map[f]
                 self._client.cancel(af.futures)
-                all_params = all_params[:-nleft]
-                all_scores = all_scores[:-n_splits * nleft]
                 break
-            p = next(params_iter)
 
             cv_scores, obj_score_names = _update_graph_with_objective_scores([p])
             f = self._client.compute(Delayed(obj_score_names[0], dsk))
-            af.add(f)
+            score_map[f] = cv_scores[0]
             self._job_map[f] = params
-            all_params.append(p)
-            all_scores.extend(cv_scores)
+            af.add(f)
 
         # finalize results
         main_token = next_token.token
-        keys = generate_results(dsk, estimator, all_scores, main_token, X_name,
-                                y_name, all_params, n_splits, self.error_score,
-                                weights, self.refit, fit_params)
+        keys = generate_results(dsk, estimator, list(tz.concat([score_map[f] for f in completed])),
+                                main_token, X_name, y_name,
+                                [self._job_map[f] for f in completed], n_splits,
+                                self.error_score, weights, self.refit, fit_params)
 
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
         n_jobs = _normalize_n_jobs(self.n_jobs)
         scheduler = self._client.get
+        # n_jobs is a bit excessive if we've already gotten the results
         out = scheduler(dsk, keys, num_workers=n_jobs)
         self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
@@ -141,14 +163,11 @@ class AsyncSearchCV(DaskBaseSearchCV):
 
 class AsyncRandomizedSearchCV(AsyncSearchCV):
     def __init__(self, estimator, param_distributions, n_iter=10, random_state=None,
-                 client=None, threshold=0.9,
-                 scoring=None, iid=True, refit=True, cv=None, error_score='raise',
-                 return_train_score=True, scheduler=None, n_jobs=-1, cache_cv=True):
-        """
-        criterion : a callable taking a list of scores and returning bool
-        """
+                 threshold=0.9, scoring=None, iid=True, refit=True, cv=None,
+                 error_score='raise', return_train_score=True, scheduler=None,
+                 n_jobs=-1, cache_cv=True, client=None
+                 ):
         super(AsyncRandomizedSearchCV, self).__init__(
-            threshold=threshold,
             estimator=estimator,
             scoring=scoring, iid=iid,
             refit=refit, cv=cv,
@@ -157,17 +176,33 @@ class AsyncRandomizedSearchCV(AsyncSearchCV):
             scheduler=scheduler,
             n_jobs=n_jobs,
             cache_cv=cache_cv,
+            client=client
         )
         self.param_distributions = param_distributions
-        self.n_iter = n_iter
+        self.n_iter = n_iter  # maximum number of iterations
         self.random_state = random_state
-        if client is None:
-            client = Client()
-        self._client = client
-        self._job_map = {}
-
-    def _get_param_iterator(self):
-        """Return ParameterSampler instance for the given distributions"""
-        return model_selection.ParameterSampler(self.param_distributions,
+        self._threshold = threshold
+        self._param_iter = iter(
+            model_selection.ParameterSampler(self.param_distributions,
                                                 self.n_iter,
                                                 random_state=self.random_state)
+        )
+
+    # todo: decide whether to use a generator method here instead of exception
+    def _parameter_sampler(self, params, scores, timestamps):
+        if params == scores == timestamps == None:  # fixme
+            return next(self._param_iter)
+
+        best_score, score = max(scores), scores[-1]
+
+        logger.debug(
+            "Current score {} for parameters: {}".format(score, params[-1]))
+
+        if score > best_score:
+            logger.info(
+                "Best score {} for parameters: {}".format(score, params[-1]))
+
+        if (best_score >= self._threshold) or (len(scores) > self.n_iter):
+            raise CriterionReached()
+        else:
+            return next(self._param_iter)
