@@ -1,20 +1,19 @@
 import abc
+import logging
 import numbers
+import operator as op
+import time
 from collections import defaultdict
 
 import numpy as np
-import time
 import toolz as tz
-import operator as op
 from dask.delayed import tokenize, Delayed
-from distributed import Client, as_completed, wait
+from distributed import Client, as_completed
 from sklearn import model_selection
 from sklearn.metrics.scorer import check_scoring
 
 from dask_searchcv.model_selection import DaskBaseSearchCV, build_graph, \
     update_graph, generate_results, _normalize_n_jobs
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,6 @@ class CriterionReached(BaseException):
     """Stopping criterion for search has been reached"""
 
 
-# todo: find a way to use the threaded/... verions of scheduler with compute
 class AsyncSearchCV(DaskBaseSearchCV):
     def __init__(self, estimator, scoring=None,
                  iid=True, refit=True, cv=None,
@@ -65,7 +63,42 @@ class AsyncSearchCV(DaskBaseSearchCV):
             new parameter dict for self._estimator
 
         """
-        pass
+
+    def _build_graph(self, X, y, groups, fit_params):
+        # build graph
+        (dsk, cv_name, X_name, y_name, n_splits, fit_params, weights,
+         next_param_token, next_token) = build_graph(
+            self.estimator, self.cv, X, y, groups, fit_params, iid=self.iid,
+            error_score=self.error_score, return_train_score=self.return_train_score,
+            cache_cv=self.cache_cv
+        )
+        self.dask_graph_ = dsk
+        self._cv_name = cv_name
+        self._X_name = X_name
+        self._y_name = y_name
+        self.n_splits_ = n_splits
+        self._fit_params = fit_params
+        self._next_token = next_token
+        self._next_param_token = next_param_token
+        self._weights = weights
+
+    def _update_graph(self, params):
+        # we reset the default iterator between updates to avoid duplicate keys
+        self._next_token.counts = defaultdict(int)
+        cv_scores = update_graph(self.dask_graph_, self._next_param_token,
+                                 self._next_token, self.estimator, self._cv_name,
+                                 self._X_name, self._y_name, self._fit_params,
+                                 self.n_splits_, self.error_score, self.scorer_,
+                                 self.return_train_score, params)
+
+        cv_scores = [v for i, v in
+                     sorted(tz.groupby(1, cv_scores).items(), key=op.itemgetter(0))]
+        objective_scores = [
+            'objective-score-{}'.format(tokenize(*v)) for v in cv_scores]
+        for name, v in zip(objective_scores, cv_scores):
+            self.dask_graph_[name] = (_objective,) + tuple(v)
+
+        return cv_scores, objective_scores
 
     def fit_async(self, X, y=None, groups=None, **fit_params):
         if not (isinstance(self.error_score, numbers.Number) or
@@ -76,44 +109,21 @@ class AsyncSearchCV(DaskBaseSearchCV):
         self.scorer_ = check_scoring(estimator, scoring=self.scoring)
         ncores = len(self._client.ncores())
 
-        # build graph
-        (dsk, cv_name, X_name, y_name, n_splits, fit_params, weights,
-         next_param_token, next_token) = build_graph(
-            estimator, self.cv, X, y, groups, fit_params, iid=self.iid,
-            error_score=self.error_score, return_train_score=self.return_train_score,
-            cache_cv=self.cache_cv
-        )
-        _update_graph = tz.curry(update_graph)(dsk, next_param_token, next_token,
-                                               estimator, cv_name, X_name, y_name,
-                                               fit_params, n_splits,
-                                               self.error_score, self.scorer_,
-                                               self.return_train_score)
-
-        def _update_graph_with_objective_scores(params):
-            scores = _update_graph(params)
-            scores = [v for i, v in
-                      sorted(tz.groupby(1, scores).items(), key=op.itemgetter(0))]
-            objective_scores = [
-                'objective-score-{}'.format(tokenize(*v)) for v in scores]
-            for name, v in zip(objective_scores, scores):
-                dsk[name] = (_objective,) + tuple(v)
-            return scores, objective_scores
-
         # fill cluster with jobs
+        # todo: change interface of _parameter_sampler to avoid this None,None,None
         candidate_params = [self._parameter_sampler(None, None, None) for _ in
                             range(int(ncores * 2))]
 
-        next_token.counts = defaultdict(int)
-        cv_scores, obj_scores = _update_graph_with_objective_scores(candidate_params)
+        self._build_graph(X, y, groups, fit_params)
+        cv_scores, obj_scores = self._update_graph(candidate_params)
 
-        fs = [self._client.compute(Delayed(k, dsk)) for k in obj_scores]
+        fs = [self._client.compute(Delayed(k, self.dask_graph_)) for k in obj_scores]
         self._job_map = {k: f for k, f in zip(fs, candidate_params)}
 
         af = as_completed(fs)
 
         score_map = {k: s for k, s in zip(fs, cv_scores)}
-        obj_scores, timestamps = {}, {}
-        completed = []  # to keep ordering
+        completed, obj_scores, timestamps = [], {}, {}
 
         # adding jobs as completed
         for future in af:
@@ -135,29 +145,31 @@ class AsyncSearchCV(DaskBaseSearchCV):
                 self._client.cancel(af.futures)
                 break
 
-            cv_scores, obj_score_names = _update_graph_with_objective_scores([p])
-            f = self._client.compute(Delayed(obj_score_names[0], dsk))
+            cv_scores, obj_score_names = self._update_graph([p])
+            f = self._client.compute(Delayed(obj_score_names[0], self.dask_graph_))
             score_map[f] = cv_scores[0]
             self._job_map[f] = params
             af.add(f)
 
         # finalize results
-        main_token = next_token.token
-        keys = generate_results(dsk, estimator, list(tz.concat([score_map[f] for f in completed])),
-                                main_token, X_name, y_name,
-                                [self._job_map[f] for f in completed], n_splits,
-                                self.error_score, weights, self.refit, fit_params)
+        main_token = self._next_token.token
+        keys = generate_results(self.dask_graph_, estimator,
+                                list(tz.concat([score_map[f] for f in completed])),
+                                main_token, self._X_name, self._y_name,
+                                [self._job_map[f] for f in completed],
+                                self.n_splits_, self.error_score, self._weights,
+                                self.refit, self._fit_params)
 
-        self.dask_graph_ = dsk
-        self.n_splits_ = n_splits
         n_jobs = _normalize_n_jobs(self.n_jobs)
         scheduler = self._client.get
         # n_jobs is a bit excessive if we've already gotten the results
-        out = scheduler(dsk, keys, num_workers=n_jobs)
+        out = scheduler(self.dask_graph_, keys, num_workers=n_jobs)
+
         self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
         if self.refit:
             self.best_estimator_ = out[1]
+
         return self
 
 
@@ -183,9 +195,8 @@ class AsyncRandomizedSearchCV(AsyncSearchCV):
         self.random_state = random_state
         self._threshold = threshold
         self._param_iter = iter(
-            model_selection.ParameterSampler(self.param_distributions,
-                                                self.n_iter,
-                                                random_state=self.random_state)
+            model_selection.ParameterSampler(self.param_distributions, self.n_iter,
+                                             random_state=self.random_state)
         )
 
     # todo: decide whether to use a generator method here instead of exception
@@ -194,10 +205,8 @@ class AsyncRandomizedSearchCV(AsyncSearchCV):
             return next(self._param_iter)
 
         best_score, score = max(scores), scores[-1]
-
         logger.debug(
             "Current score {} for parameters: {}".format(score, params[-1]))
-
         if score > best_score:
             logger.info(
                 "Best score {} for parameters: {}".format(score, params[-1]))
