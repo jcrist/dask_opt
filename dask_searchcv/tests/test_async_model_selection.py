@@ -1,45 +1,84 @@
+from dask.base import tokenize
+from distributed import Client
+from distributed.utils_test import loop, cluster
 from sklearn.datasets import load_digits
+from sklearn.pipeline import Pipeline, FeatureUnion
+
+from dask_searchcv import GridSearchCV
+from dask_searchcv.async_model_selection import AsyncGridSearchCV
+from dask_searchcv.utils_test import MockClassifier, ScalingTransformer
+import pandas as pd
+import numpy as np
+import pytest
 
 
-def test_criterion():
-    criterion = Criterion()
-
-
-def test_async_searchcv():
+@pytest.mark.parametrize(
+    'model,param_grid',
+    [
+        (Pipeline(steps=[('clf', MockClassifier())]), {'clf__foo_param': [2]}),
+        (Pipeline(steps=[
+            ('clf1', MockClassifier()),
+            ('clf2', MockClassifier()),
+        ]), {'clf1__foo_param': [0, 1, 2, 3]}),
+        (Pipeline(steps=[('clf1', FeatureUnion(transformer_list=[
+                      ('scale1', ScalingTransformer())
+            ])),
+            ('clf2', MockClassifier()),
+        ]), {'clf2__foo_param': [0, 1, 2, 3]})
+    ]
+)
+def test_asyncgridsearchcv(model, param_grid, loop):
     digits = load_digits()
 
-    model = SVC(kernel='rbf')
-
-    # ended up tuning these parameters a bit :-P
-    param_space = {'C': stats.expon(0.00001, 20),
-                   'gamma': stats.expon(0.00001, 0.5),
-                   'class_weight': [None, 'balanced']}
-
     n_splits = 3
-    n_iter = 100000
-    random_state = 1
-    client = Client()
 
-    search = AsyncRandomizedSearchCV(
-        estimator=model,
-        param_distributions=param_space,
-        cv=n_splits,
-        n_iter=n_iter,
-        random_state=random_state,
-        client=client
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop, set_as_default=False) as client:
+            search = AsyncGridSearchCV(
+                estimator=model,
+                param_grid=param_grid,
+                cv=n_splits,
+                threshold=1.1,  # hack to exhaust all parameters in the grid
+                client=client
+            )
+
+            X = digits.data
+            y = digits.target
+
+            search.fit_async(X, y)
+            cv_results_async = pd.DataFrame(search.cv_results_)
+            dsk_async = search.dask_graph_
+
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop, set_as_default=False) as client:
+            search = GridSearchCV(
+                estimator=model,
+                param_grid=param_grid,
+                cv=n_splits,
+                scheduler=client
+            )
+
+            X = digits.data
+            y = digits.target
+
+            search.fit(X, y)
+            cv_results_sync = pd.DataFrame(search.cv_results_)
+            dsk_sync = search.dask_graph_
+
+    print(cv_results_sync)
+    print(cv_results_async)
+
+    assert np.array_equal(
+        cv_results_sync.assign(
+            sort_token=cv_results_sync.params.apply(tokenize)).sort_values(
+            'sort_token').values,
+        cv_results_async.assign(
+            sort_token=cv_results_async.params.apply(tokenize)).sort_values(
+            'sort_token').values
     )
+    print('sync graph size', len(dsk_sync), 'async graph size', len(dsk_async))
+    # assert dsk_async == dsk_sync
 
-    X = digits.data
-    y = digits.target
-    fit_params = {}
 
-    start_t = time.time()
-    search.fit_async(digits.data, digits.target)
-
-    client.shutdown()
-
-    print("Search finished")
-    print("best_score {}; best_params - {}".format(search.best_score_,
-                                                   search.best_params_))
-    print("Async fit took {:.3f} seconds".format(time.time()-start_t))
-
+def test_persisted_scores_are_kept():
+    pass

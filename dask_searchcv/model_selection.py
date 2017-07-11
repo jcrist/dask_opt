@@ -822,13 +822,13 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                          all_params, n_splits, error_score, weights, self.refit,
                          fit_params)
 
-        self.dask_graph_ = dsk
-        self.n_splits_ = n_splits
-
         n_jobs = _normalize_n_jobs(self.n_jobs)
         scheduler = _normalize_scheduler(self.scheduler, n_jobs)
 
         out = scheduler(dsk, keys, num_workers=n_jobs)
+
+        self.dask_graph_ = dsk
+        self.n_splits_ = n_splits
 
         self.cv_results_ = results = out[0]
         self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
@@ -1156,11 +1156,13 @@ class RandomizedSearchCV(DaskBaseSearchCV):
                  random_state=None, scoring=None, iid=True, refit=True,
                  cv=None, error_score='raise', return_train_score=True,
                  scheduler=None, n_jobs=-1, cache_cv=True):
-
         super(RandomizedSearchCV, self).__init__(estimator=estimator,
-                scoring=scoring, iid=iid, refit=refit, cv=cv,
-                error_score=error_score, return_train_score=return_train_score,
-                scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv)
+                                                 scoring=scoring, iid=iid,
+                                                 refit=refit, cv=cv,
+                                                 error_score=error_score,
+                                                 return_train_score=return_train_score,
+                                                 scheduler=scheduler, n_jobs=n_jobs,
+                                                 cache_cv=cache_cv)
 
         self.param_distributions = param_distributions
         self.n_iter = n_iter
