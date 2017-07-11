@@ -115,7 +115,7 @@ class AsyncSearchCV(DaskBaseSearchCV):
 
         # fill cluster with jobs
         candidate_params = []
-        for _ in range(int(ncores * self._occupancy_factor)):  # fixme: configurable default occupancy
+        for _ in range(int(ncores * self._occupancy_factor)):
             try:
                 candidate_params.append(self._parameter_sampler(None, None, None))
             except StopIteration:

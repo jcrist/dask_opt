@@ -10,3 +10,9 @@ log
 .DS_Store
 *.swp
 *.swo
+.cache/
+.ipynb_checkpoints/
+__pycache__/
+examples/output_data/
+examples/scikit_learn_data/
+notebooks/*
