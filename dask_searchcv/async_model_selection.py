@@ -144,30 +144,32 @@ class AsyncSearchCV(DaskBaseSearchCV):
 
         # adding jobs as completed
         while True:
-            # for future in af:
             try:
                 futures = af.next_batch()
-                parameters_to_update = []
-                for future in futures:
-                    params, obj_score = self._job_map[future], future.result()
-                    completed.append(future)
-                    timestamps[future] = time.time()
-                    obj_scores[future] = obj_score
-                    try:
-                        p = self._parameter_sampler(
-                            [self._job_map[f] for f in completed],
-                            [obj_scores[f] for f in completed],
-                            [timestamps[f] for f in completed]
-                        )
-                        parameters_to_update.append(p)
-                    except CriterionReached:
-                        for f in af.futures:
-                            del self._job_map[f]
-                            del score_map[f]
-                        self._client.cancel(af.futures)
-                        raise
-            except (StopIteration, CriterionReached):
+            except StopIteration:
                 break
+
+            parameters_to_update = []
+            for future in futures:
+                params, obj_score = self._job_map[future], future.result()
+                completed.append(future)
+                timestamps[future] = time.time()
+                obj_scores[future] = obj_score
+                try:
+                    p = self._parameter_sampler(
+                        [self._job_map[f] for f in completed],
+                        [obj_scores[f] for f in completed],
+                        [timestamps[f] for f in completed]
+                    )
+                    parameters_to_update.append(p)
+                except CriterionReached:
+                    for f in af.futures:
+                        del self._job_map[f]
+                        del score_map[f]
+                    self._client.cancel(af.futures)
+                    break
+                except StopIteration:
+                    continue
 
             if parameters_to_update:
                 cv_score_names, obj_score_names = self._update_graph(parameters_to_update)

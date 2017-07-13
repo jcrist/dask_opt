@@ -126,10 +126,10 @@ def test_cachingplugin():
     assert caching_plugin.total_bytes == 20
     assert list(caching_plugin.scheduler._keys['fake-caching-client']) == ['b']
 
-    # Touching keys from the client
-    # -----------------------------
+    # Touching keys from the client?
+    # ------------------------------
+    # Would like a method to affect the cost of the key from the client.
     # Cannot affect key cost from client.gather since SchedulerPlugin doens't provide
-    #  that interface. Have to increment cost on the plugin via rpc from client.
+    #  that interface. Maybe try increment cost on the plugin via rpc from client.
     #
-    # caching_plugin.touch('b')
-    # touch increases the score
+    # ... something like from local: caching_plugin.touch('b')
