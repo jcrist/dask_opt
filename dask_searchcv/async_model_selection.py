@@ -28,6 +28,8 @@ def _objective(*cv_scores):
     else:
         return np.mean(cv_scores)
 
+# todo: sort out docstrings in sub-classes of DaskBaseSearchCV
+
 
 class CriterionReached(BaseException):
     """Stopping criterion for search has been reached"""
@@ -145,29 +147,27 @@ class AsyncSearchCV(DaskBaseSearchCV):
             # for future in af:
             try:
                 futures = af.next_batch()
-            except StopIteration:
+                parameters_to_update = []
+                for future in futures:
+                    params, obj_score = self._job_map[future], future.result()
+                    completed.append(future)
+                    timestamps[future] = time.time()
+                    obj_scores[future] = obj_score
+                    try:
+                        p = self._parameter_sampler(
+                            [self._job_map[f] for f in completed],
+                            [obj_scores[f] for f in completed],
+                            [timestamps[f] for f in completed]
+                        )
+                        parameters_to_update.append(p)
+                    except CriterionReached:
+                        for f in af.futures:
+                            del self._job_map[f]
+                            del score_map[f]
+                        self._client.cancel(af.futures)
+                        raise
+            except (StopIteration, CriterionReached):
                 break
-            parameters_to_update = []
-            for future in futures:
-                params, obj_score = self._job_map[future], future.result()
-                completed.append(future)
-                timestamps[future] = time.time()
-                obj_scores[future] = obj_score
-                try:
-                    p = self._parameter_sampler(
-                        [self._job_map[f] for f in completed],
-                        [obj_scores[f] for f in completed],
-                        [timestamps[f] for f in completed]
-                    )
-                    parameters_to_update.append(p)
-                except CriterionReached:
-                    for f in af.futures:
-                        del self._job_map[f]
-                        del score_map[f]
-                    self._client.cancel(af.futures)
-                    break
-                except StopIteration:
-                    continue
 
             if parameters_to_update:
                 cv_score_names, obj_score_names = self._update_graph(parameters_to_update)
@@ -295,6 +295,14 @@ class AsyncGridSearchCV(AsyncSearchCV):
 
 
 class CachingPlugin(SchedulerPlugin):
+    """Simple caching of results on the scheduler for asynchronous search speedup
+
+    Run with:
+        client.run_on_scheduler(
+            lambda dask_scheduler: dask_scheduler.add_plugin(
+                CachingPlugin(dask_scheduler)))
+
+    """
     def __init__(self, scheduler, cache_size=1e9, limit=0.):
         self.scheduler = scheduler
         self.startstops = []

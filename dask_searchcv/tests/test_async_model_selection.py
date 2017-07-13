@@ -71,9 +71,10 @@ def test_asyncgridsearchcv(model, param_grid, loop):
             cv_results_sync = pd.DataFrame(search.cv_results_)
             dsk_sync = search.dask_graph_
 
-    print(cv_results_sync)
-    print(cv_results_async)
+    # print(cv_results_sync)
+    # print(cv_results_async)
 
+    # some manipulation required to compare the results:
     assert np.array_equal(
         cv_results_sync.assign(
             sort_token=cv_results_sync.params.apply(tokenize)).sort_values(
@@ -82,12 +83,9 @@ def test_asyncgridsearchcv(model, param_grid, loop):
             sort_token=cv_results_async.params.apply(tokenize)).sort_values(
             'sort_token').values
     )
-    print('sync graph size', len(dsk_sync), 'async graph size', len(dsk_async))
+
+    # print('sync graph size', len(dsk_sync), 'async graph size', len(dsk_async))
     # assert dsk_async == dsk_sync
-
-
-def test_persisted_scores_are_kept():
-    pass
 
 
 class MockScheduler(object):

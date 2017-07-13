@@ -5,8 +5,8 @@ from scipy import stats
 from sklearn.datasets import load_digits
 from sklearn.svm import SVC
 
-from dask_searchcv.async_model_selection import AsyncRandomizedSearchCV
-
+from dask_searchcv.async_model_selection import AsyncRandomizedSearchCV, \
+    CachingPlugin
 
 if __name__ == '__main__':
     import logging
@@ -29,6 +29,10 @@ if __name__ == '__main__':
     random_state = 1
     client = Client()
 
+    client.run_on_scheduler(
+        lambda dask_scheduler: dask_scheduler.add_plugin(
+            CachingPlugin(dask_scheduler)))
+
     search = AsyncRandomizedSearchCV(
         estimator=model,
         param_distributions=param_space,
@@ -36,7 +40,7 @@ if __name__ == '__main__':
         n_iter=n_iter,
         random_state=random_state,
         client=client,
-        threshold=0.6
+        threshold=0.9
     )
 
     X = digits.data
@@ -46,9 +50,9 @@ if __name__ == '__main__':
     start_t = time.time()
     search.fit_async(digits.data, digits.target)
 
-    client.shutdown()
-
     print("Search finished")
     print("best_score {}; best_params - {}".format(search.best_score_,
                                                    search.best_params_))
     print("Async fit took {:.3f} seconds".format(time.time()-start_t))
+
+    client.shutdown()
