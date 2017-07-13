@@ -72,14 +72,13 @@ def test_asyncgridsearchcv(model, param_grid, loop):
             # dsk_sync = search.dask_graph_
 
     # some manipulation required to compare the results:
-    assert np.array_equal(
-        cv_results_sync.assign(
+    assert cv_results_sync.assign(
             sort_token=cv_results_sync.params.apply(tokenize)).sort_values(
-            'sort_token').values,
-        cv_results_async.assign(
-            sort_token=cv_results_async.params.apply(tokenize)).sort_values(
-            'sort_token').values
-    )
+            'sort_token').sort_token.equals(
+            cv_results_async.assign(
+                sort_token=cv_results_async.params.apply(tokenize)).sort_values(
+                'sort_token').sort_token
+        )
 
     # print('sync graph size', len(dsk_sync), 'async graph size', len(dsk_async))
     # assert dsk_async == dsk_sync
