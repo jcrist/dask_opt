@@ -1156,14 +1156,11 @@ class RandomizedSearchCV(DaskBaseSearchCV):
                  random_state=None, scoring=None, iid=True, refit=True,
                  cv=None, error_score='raise', return_train_score=True,
                  scheduler=None, n_jobs=-1, cache_cv=True):
-        super(RandomizedSearchCV, self).__init__(estimator=estimator,
-                                                 scoring=scoring, iid=iid,
-                                                 refit=refit, cv=cv,
-                                                 error_score=error_score,
-                                                 return_train_score=return_train_score,
-                                                 scheduler=scheduler, n_jobs=n_jobs,
-                                                 cache_cv=cache_cv)
-
+        super(RandomizedSearchCV, self).__init__(
+            estimator=estimator, scoring=scoring, iid=iid, refit=refit, cv=cv,
+            error_score=error_score, return_train_score=return_train_score,
+            scheduler=scheduler, n_jobs=n_jobs, cache_cv=cache_cv
+        )
         self.param_distributions = param_distributions
         self.n_iter = n_iter
         self.random_state = random_state

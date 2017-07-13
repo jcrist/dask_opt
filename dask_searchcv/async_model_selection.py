@@ -151,7 +151,7 @@ class AsyncSearchCV(DaskBaseSearchCV):
 
             parameters_to_update = []
             for future in futures:
-                params, obj_score = self._job_map[future], future.result()
+                obj_score = future.result()
                 completed.append(future)
                 timestamps[future] = time.time()
                 obj_scores[future] = obj_score
@@ -172,7 +172,8 @@ class AsyncSearchCV(DaskBaseSearchCV):
                     continue
 
             if parameters_to_update:
-                cv_score_names, obj_score_names = self._update_graph(parameters_to_update)
+                cv_score_names, obj_score_names = self._update_graph(
+                    parameters_to_update)
 
                 # cv_sc, obj_sc = cv_score_names[0], obj_score_names[0]
                 # cv_score_futures.append(
@@ -186,11 +187,12 @@ class AsyncSearchCV(DaskBaseSearchCV):
                 obj_scores_list.append(
                     self._client.persist(Delayed(obj_score_names, self.dask_graph_))
                 )
-                for obj_sc, cv_sc, p in zip(obj_score_names, cv_score_names, parameters_to_update):
-                    f = Future(obj_sc, self._client)
-                    score_map[f] = cv_sc
-                    self._job_map[f] = p
-                    af.add(f)
+                for obj_sc, cv_sc, p in zip(obj_score_names, cv_score_names,
+                                            parameters_to_update):
+                    future = Future(obj_sc, self._client)
+                    score_map[future] = cv_sc
+                    self._job_map[future] = p
+                    af.add(future)
 
         # finalize results
         main_token = self._next_token.token
@@ -264,14 +266,12 @@ class AsyncGridSearchCV(AsyncSearchCV):
                  error_score='raise', return_train_score=True,
                  n_jobs=-1, cache_cv=True, client=None, occupancy_factor=2
                  ):
-        super(AsyncGridSearchCV, self).__init__(estimator=estimator, scoring=scoring,
-                                                iid=iid, refit=refit, cv=cv,
-                                                error_score=error_score,
-                                                return_train_score=return_train_score,
-                                                n_jobs=n_jobs, cache_cv=cache_cv,
-                                                client=client,
-                                                occupancy_factor=occupancy_factor
-                                                )
+        super(AsyncGridSearchCV, self).__init__(
+            estimator=estimator, scoring=scoring, iid=iid, refit=refit, cv=cv,
+            error_score=error_score, return_train_score=return_train_score,
+            n_jobs=n_jobs, cache_cv=cache_cv, client=client,
+            occupancy_factor=occupancy_factor
+        )
         self.param_grid = param_grid
         self._threshold = threshold
         _check_param_grid(param_grid)

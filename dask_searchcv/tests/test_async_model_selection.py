@@ -2,7 +2,7 @@ from collections import defaultdict
 
 from dask.base import tokenize
 from distributed import Client
-from distributed.utils_test import loop, cluster
+from distributed.utils_test import cluster, loop  # noqa: F401
 from sklearn.datasets import load_digits
 from sklearn.pipeline import Pipeline, FeatureUnion
 
@@ -18,7 +18,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-@pytest.mark.parametrize(
+@pytest.mark.parametrize(  # noqa: F811
     'model,param_grid',
     [
         (Pipeline(steps=[('clf', MockClassifier())]), {'clf__foo_param': [2]}),
@@ -53,7 +53,7 @@ def test_asyncgridsearchcv(model, param_grid, loop):
 
             search.fit_async(X, y)
             cv_results_async = pd.DataFrame(search.cv_results_)
-            dsk_async = search.dask_graph_
+            # dsk_async = search.dask_graph_
 
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop, set_as_default=False) as client:
@@ -69,10 +69,7 @@ def test_asyncgridsearchcv(model, param_grid, loop):
 
             search.fit(X, y)
             cv_results_sync = pd.DataFrame(search.cv_results_)
-            dsk_sync = search.dask_graph_
-
-    # print(cv_results_sync)
-    # print(cv_results_async)
+            # dsk_sync = search.dask_graph_
 
     # some manipulation required to compare the results:
     assert np.array_equal(
