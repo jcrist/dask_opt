@@ -1,5 +1,4 @@
 from collections import defaultdict
-
 from dask.base import tokenize
 from distributed import Client
 from distributed.utils_test import cluster, loop  # noqa: F401
@@ -53,7 +52,6 @@ def test_asyncgridsearchcv(model, param_grid, loop):
 
             search.fit_async(X, y)
             cv_results_async = pd.DataFrame(search.cv_results_)
-            # dsk_async = search.dask_graph_
 
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop, set_as_default=False) as client:
@@ -69,19 +67,18 @@ def test_asyncgridsearchcv(model, param_grid, loop):
 
             search.fit(X, y)
             cv_results_sync = pd.DataFrame(search.cv_results_)
-            # dsk_sync = search.dask_graph_
+
+    assert len(cv_results_sync) == len(cv_results_async)
 
     # some manipulation required to compare the results:
-    assert cv_results_sync.assign(
-            sort_token=cv_results_sync.params.apply(tokenize)).sort_values(
-            'sort_token').sort_token.equals(
-            cv_results_async.assign(
-                sort_token=cv_results_async.params.apply(tokenize)).sort_values(
-                'sort_token').sort_token
-        )
+    sync_values = cv_results_sync.assign(
+        sort_token=cv_results_sync.params.apply(tokenize)).sort_values(
+        'sort_token').reset_index(drop=True).values
+    async_values = cv_results_async.assign(
+        sort_token=cv_results_async.params.apply(tokenize)).sort_values(
+        'sort_token').reset_index(drop=True).values
 
-    # print('sync graph size', len(dsk_sync), 'async graph size', len(dsk_async))
-    # assert dsk_async == dsk_sync
+    assert np.array_equal(sync_values, async_values)
 
 
 class MockScheduler(object):
