@@ -127,9 +127,9 @@ class AsyncSearchCV(DaskBaseSearchCV):
         cv_scores, obj_scores = self._update_graph(candidate_params)
 
         # we do this just to keep the cv_scores around:
-        # cv_scores_list = [
-        #     self._client.persist(Delayed(k, self.dask_graph_)) for k in cv_scores
-        # ]
+        cv_scores_list = [
+            self._client.persist(Delayed(k, self.dask_graph_)) for k in cv_scores
+        ]
         obj_scores_list = [
             self._client.persist(Delayed(k, self.dask_graph_)) for k in obj_scores
         ]
@@ -175,15 +175,9 @@ class AsyncSearchCV(DaskBaseSearchCV):
                 cv_score_names, obj_score_names = self._update_graph(
                     parameters_to_update)
 
-                # cv_sc, obj_sc = cv_score_names[0], obj_score_names[0]
-                # cv_score_futures.append(
-                #     self._client.compute(Delayed(cv_scores[0], self.dask_graph_)))
-                # f = self._client.compute(
-                # Delayed(obj_score_names[0], self.dask_graph_))
-
-                # cv_scores_list.append(
-                #     self._client.persist(Delayed(cv_score_names, self.dask_graph_))
-                # )
+                cv_scores_list.append(
+                    self._client.persist(Delayed(cv_score_names, self.dask_graph_))
+                )
                 obj_scores_list.append(
                     self._client.persist(Delayed(obj_score_names, self.dask_graph_))
                 )
