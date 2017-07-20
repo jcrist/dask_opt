@@ -71,6 +71,10 @@ def test_asyncgridsearchcv(model, param_grid, loop):
     assert len(cv_results_sync) == len(cv_results_async)
 
     # some manipulation required to compare the results:
+    cv_results_sync = cv_results_sync[
+        [c for c in cv_results_sync if not c.endswith('_time')]]
+    cv_results_async = cv_results_async[
+        [c for c in cv_results_async if not c.endswith('_time')]]
     sync_values = cv_results_sync.assign(
         sort_token=cv_results_sync.params.apply(tokenize)).sort_values(
         'sort_token').reset_index(drop=True).values
