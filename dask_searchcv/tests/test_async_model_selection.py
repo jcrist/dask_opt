@@ -130,3 +130,10 @@ def test_cachingplugin():
     #  that interface. Maybe try increment cost on the plugin via rpc from client.
     #
     # ... something like from local: caching_plugin.touch('b')
+
+
+def test_asyncsearchcv_parameter_sampler():
+    # update parameters appends
+    # parameter sampler can depend on the ordering of results
+    # check what happens if results are appended with out-of-order timestamps
+    pass

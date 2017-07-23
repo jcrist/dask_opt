@@ -23,10 +23,11 @@ log = logging.getLogger(__name__)
 
 
 def _objective(*cv_scores):
-    if isinstance(cv_scores[0], tuple):  # return_train_score
-        return np.mean([_[0] for _ in cv_scores])
-    else:
-        return np.mean(cv_scores)
+    return np.mean([_[1] for _ in cv_scores])
+    # if isinstance(cv_scores[0], tuple):  # return_train_score
+    #
+    # else:
+    #     return np.mean(cv_scores)
 
 # todo: sort out docstrings in sub-classes of DaskBaseSearchCV
 
@@ -53,9 +54,13 @@ class AsyncSearchCV(DaskBaseSearchCV):
         self._client = client
         self._job_map = {}
         self._occupancy_factor = occupancy_factor
+        self._results = []
+
+    def _update_results(self, params, score, timestamp):
+        self._results.append((params, score, timestamp))
 
     @abc.abstractmethod
-    def _parameter_sampler(self, params, scores, timestamps):
+    def _parameter_sampler(self):
         """Sample new parameters according to previous results with timestamps
 
         Args:
@@ -119,7 +124,7 @@ class AsyncSearchCV(DaskBaseSearchCV):
         candidate_params = []
         for _ in range(int(ncores * self._occupancy_factor)):
             try:
-                candidate_params.append(self._parameter_sampler(None, None, None))
+                candidate_params.append(self._parameter_sampler())
             except StopIteration:
                 break
 
@@ -150,26 +155,28 @@ class AsyncSearchCV(DaskBaseSearchCV):
                 break
 
             parameters_to_update = []
-            for future in futures:
-                obj_score = future.result()
-                completed.append(future)
-                timestamps[future] = time.time()
-                obj_scores[future] = obj_score
-                try:
-                    p = self._parameter_sampler(
-                        [self._job_map[f] for f in completed],
-                        [obj_scores[f] for f in completed],
-                        [timestamps[f] for f in completed]
+            try:
+                for future in futures:
+                    obj_score = future.result()
+                    completed.append(future)
+                    timestamps[future] = time.time()
+                    obj_scores[future] = obj_score
+                    self._update_results(
+                        self._job_map[future], obj_scores[future], timestamps[future]
                     )
-                    parameters_to_update.append(p)
-                except CriterionReached:
-                    for f in af.futures:
-                        del self._job_map[f]
-                        del score_map[f]
-                    self._client.cancel(af.futures)
-                    break
-                except StopIteration:
-                    continue
+                    try:
+                        p = self._parameter_sampler()
+                        parameters_to_update.append(p)
+                    except CriterionReached:
+                        for f in af.futures:
+                            del self._job_map[f]
+                            del score_map[f]
+                        self._client.cancel(af.futures)
+                        raise
+                    except StopIteration:
+                        continue
+            except CriterionReached:
+                break
 
             if parameters_to_update:
                 cv_score_names, obj_score_names = self._update_graph(
@@ -236,22 +243,25 @@ class AsyncRandomizedSearchCV(AsyncSearchCV):
             model_selection.ParameterSampler(self.param_distributions, self.n_iter,
                                              random_state=self.random_state)
         )
+        self._results = []
+        self._best_score = - np.inf
 
-    def _parameter_sampler(self, params, scores, timestamps):
-        if params == scores == timestamps is None:
-            return next(self._param_iter)
-
-        best_score, score = max(scores), scores[-1]
+    def _update_results(self, params, score, timestamp):
         log.debug(
-            "Current score {} for parameters: {}".format(score, params[-1]))
-        if score > best_score:
-            log.info(
-                "Best score {} for parameters: {}".format(score, params[-1]))
+            "Current score {} for parameters: {}".format(score, params))
+        self._results.append((params, score, timestamp))
 
-        if (best_score >= self._threshold) or (len(scores) > self.n_iter):
+        if score > self._best_score:
+            log.info(
+                "Best score {} for parameters: {}".format(score, params))
+            self._best_score = score
+        if (self._best_score >= self._threshold) or (
+            len(self._results) > self.n_iter
+        ):
             raise CriterionReached()
-        else:
-            return next(self._param_iter)
+
+    def _parameter_sampler(self):
+        return next(self._param_iter)
 
 
 class AsyncGridSearchCV(AsyncSearchCV):
@@ -272,22 +282,24 @@ class AsyncGridSearchCV(AsyncSearchCV):
         self._param_iter = iter(
             model_selection.ParameterGrid(self.param_grid)
         )
+        self._results = []
+        self._best_score = - np.inf
 
-    def _parameter_sampler(self, params, scores, timestamps):
-        if params == scores == timestamps is None:
-            return next(self._param_iter)
-
-        best_score, score = max(scores), scores[-1]
+    def _update_results(self, params, score, timestamp):
         log.debug(
-            "Current score {} for parameters: {}".format(score, params[-1]))
-        if score > best_score:
-            log.info(
-                "Best score {} for parameters: {}".format(score, params[-1]))
+            "Current score {} for parameters: {}".format(score, params))
+        self._results.append((params, score, timestamp))
 
-        if best_score >= self._threshold:
+        if score > self._best_score:
+            log.info(
+                "Best score {} for parameters: {}".format(score, params))
+            self._best_score = score
+
+        if self._best_score >= self._threshold:
             raise CriterionReached()
-        else:
-            return next(self._param_iter)
+
+    def _parameter_sampler(self):
+        return next(self._param_iter)
 
 
 class CachingPlugin(SchedulerPlugin):
