@@ -14,7 +14,7 @@ from dask.base import normalize_token
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
-from sklearn.utils.fixes import rankdata
+from sklearn.utils.stats import rankdata
 from sklearn.utils.validation import check_consistent_length, _is_arraylike
 
 from .utils import copy_estimator
