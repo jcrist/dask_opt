@@ -620,3 +620,38 @@ def test_scheduler_param_distributed(loop):
 def test_scheduler_param_bad():
     with pytest.raises(ValueError):
         _normalize_scheduler('threeding', 4)
+
+
+def test_multiple_metrics():
+    from sklearn.metrics import make_scorer
+    from sklearn.metrics import accuracy_score
+    from sklearn.tree import DecisionTreeClassifier
+
+    X = da_X
+    y = da_y
+
+    scoring = {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
+
+    # Setting refit='AUC', refits an estimator on the whole dataset with the
+    # parameter setting that has the best cross-validated AUC score.
+    # That estimator is made available at ``gs.best_estimator_`` along with
+    # parameters like ``gs.best_score_``, ``gs.best_parameters_`` and
+    # ``gs.best_index_``
+    gs = dcv.GridSearchCV(DecisionTreeClassifier(random_state=42),
+                          param_grid={'min_samples_split': range(2, 403, 10)},
+                          scoring=scoring, cv=5, refit='AUC')
+    gs.fit(X, y)
+    # some basic checks
+    assert set(gs.scorer_) == {'AUC', 'Accuracy'}
+    cv_results = gs.cv_results_.keys()
+    assert 'split0_test_AUC' in cv_results
+    assert 'split0_train_AUC' in cv_results
+
+    assert 'split0_test_Accuracy' in cv_results
+    assert 'split0_test_Accuracy' in cv_results
+
+    assert 'mean_train_AUC' in cv_results
+    assert 'mean_train_Accuracy' in cv_results
+
+    assert 'std_train_AUC' in cv_results
+    assert 'std_train_Accuracy' in cv_results

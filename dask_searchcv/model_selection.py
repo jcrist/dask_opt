@@ -15,7 +15,7 @@ from dask.utils import derived_from
 from sklearn import model_selection
 from sklearn.base import is_classifier, clone, BaseEstimator, MetaEstimatorMixin
 from sklearn.exceptions import NotFittedError
-from sklearn.metrics.scorer import check_scoring
+from sklearn.metrics.scorer import check_scoring, _check_multimetric_scoring
 from sklearn.model_selection._search import _check_param_grid, BaseSearchCV
 from sklearn.model_selection._split import (_BaseKFold,
                                             BaseShuffleSplit,
@@ -63,7 +63,8 @@ class TokenIterator(object):
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, fit_params=None, iid=True, refit=True,
-                error_score='raise', return_train_score=True, cache_cv=True):
+                error_score='raise', return_train_score=True, cache_cv=True,
+                multimetric=False):
 
     X, y, groups = to_indexable(X, y, groups)
     cv = check_cv(cv, y, is_classifier(estimator))
@@ -106,12 +107,13 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     candidate_params_name = 'cv-parameters-' + main_token
     dsk[candidate_params_name] = (decompress_params, fields, params)
     dsk[cv_results] = (create_cv_results, scores, candidate_params_name,
-                       n_splits, error_score, weights)
+                       n_splits, error_score, weights, multimetric)
     keys = [cv_results]
 
     if refit:
         best_params = 'best-params-' + main_token
-        dsk[best_params] = (get_best_params, candidate_params_name, cv_results)
+        dsk[best_params] = (get_best_params, candidate_params_name, cv_results,
+                            refit)
         best_estimator = 'best-estimator-' + main_token
         if fit_params:
             fit_params = (dict, (zip, list(fit_params.keys()),
@@ -678,6 +680,10 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.scheduler = scheduler
         self.n_jobs = n_jobs
         self.cache_cv = cache_cv
+        if self.refit in (True, False):
+            self._score_key = 'score'
+        else:
+            self._score_key = self.refit
 
     @property
     def _estimator_type(self):
@@ -769,7 +775,16 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             Parameters passed to the ``fit`` method of the estimator
         """
         estimator = self.estimator
-        self.scorer_ = check_scoring(estimator, scoring=self.scoring)
+        # self.scorer_ = check_scoring(estimator, scoring=self.scoring)
+        self.scorer_, self.multimetric_ = _check_multimetric_scoring(
+            estimator, scoring=self.scoring)
+        if not self.multimetric_:
+            self.scorer_ = self.scorer_['score']
+        if self.multimetric_:
+            multimetric = self.scorer_.keys()
+        else:
+            multimetric = False
+
         error_score = self.error_score
         if not (isinstance(error_score, numbers.Number) or
                 error_score == 'raise'):
@@ -783,7 +798,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                                           refit=self.refit,
                                           error_score=error_score,
                                           return_train_score=self.return_train_score,
-                                          cache_cv=self.cache_cv)
+                                          cache_cv=self.cache_cv,
+                                          multimetric=multimetric)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
@@ -793,7 +809,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         out = scheduler(dsk, keys, num_workers=n_jobs)
 
         self.cv_results_ = results = out[0]
-        self.best_index_ = np.flatnonzero(results["rank_test_score"] == 1)[0]
+        self.best_index_ = np.flatnonzero(
+            results["rank_test_{}".format(self._score_key)] == 1)[0]
 
         if self.refit:
             self.best_estimator_ = out[1]
