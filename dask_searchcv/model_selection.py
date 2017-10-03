@@ -789,7 +789,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         # None indicates scikit-learn < 0.19 (when multimetric was added)
         # True indicates multiple metrics were used
         # False indicates a single metric was used
-        multimetric = getattr(self, 'multimetric_')
+        multimetric = getattr(self, 'multimetric_', None)
         if multimetric:
             multimetric = self.scorer_.keys()
         elif multimetric is False:

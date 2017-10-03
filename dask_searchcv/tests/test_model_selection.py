@@ -46,6 +46,7 @@ from dask_searchcv.methods import CVCache
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
                                       ignore_warnings)
+from dask_searchcv._compat import _HAS_MULTIPLE_METRICS
 
 try:
     from distributed import Client
@@ -622,6 +623,7 @@ def test_scheduler_param_bad():
         _normalize_scheduler('threeding', 4)
 
 
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
 def test_multiple_metrics():
     from sklearn.metrics import make_scorer
     from sklearn.metrics import accuracy_score
