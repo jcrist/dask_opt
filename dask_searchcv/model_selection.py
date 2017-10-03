@@ -15,7 +15,7 @@ from dask.utils import derived_from
 from sklearn import model_selection
 from sklearn.base import is_classifier, clone, BaseEstimator, MetaEstimatorMixin
 from sklearn.exceptions import NotFittedError
-from sklearn.metrics.scorer import check_scoring, _check_multimetric_scoring
+from sklearn.metrics.scorer import check_scoring
 from sklearn.model_selection._search import _check_param_grid, BaseSearchCV
 from sklearn.model_selection._split import (_BaseKFold,
                                             BaseShuffleSplit,
@@ -39,6 +39,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
 from .utils import to_indexable, to_keys, unzip
+from ._compat import _HAS_MULTIPLE_METRICS
 
 try:
     from cytoolz import get, pluck
@@ -776,14 +777,24 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         """
         estimator = self.estimator
         # self.scorer_ = check_scoring(estimator, scoring=self.scoring)
-        self.scorer_, self.multimetric_ = _check_multimetric_scoring(
-            estimator, scoring=self.scoring)
-        if not self.multimetric_:
-            self.scorer_ = self.scorer_['score']
-        if self.multimetric_:
-            multimetric = self.scorer_.keys()
+        if _HAS_MULTIPLE_METRICS:
+            from sklearn.metrics.scorer import _check_multimetric_scoring
+
+            self.scorer_, self.multimetric_ = _check_multimetric_scoring(
+                estimator, scoring=self.scoring)
         else:
-            multimetric = False
+            self.scorer_ = check_scoring(estimator, scoring=self.scoring)
+
+        # This is {None, True, False}
+        # None indicates scikit-learn < 0.19 (when multimetric was added)
+        # True indicates multiple metrics were used
+        # False indicates a single metric was used
+        multimetric = getattr(self, 'multimetric_')
+        if multimetric:
+            multimetric = self.scorer_.keys()
+        elif multimetric is False:
+            # sklearn >= 0.19.0, but single metric
+            self.scorer_ = self.scorer_['score']
 
         error_score = self.error_score
         if not (isinstance(error_score, numbers.Number) or
