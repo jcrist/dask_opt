@@ -449,13 +449,32 @@ def test_feature_union(weights):
 
 
 @ignore_warnings
-@pytest.mark.parametrize("scoring", [
-    None,
-    pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")(
-        {"score_1": _passthrough_scorer, "score_2": _passthrough_scorer}
-    )
-])
-def test_feature_union_fit_failure(scoring):
+def test_feature_union_fit_failure():
+    X, y = make_classification(n_samples=100, n_features=10, random_state=0)
+
+    pipe = Pipeline([('union', FeatureUnion([('good', MockClassifier()),
+                                             ('bad', FailingClassifier())],
+                                            transformer_weights={'bad': 0.5})),
+                     ('clf', MockClassifier())])
+
+    grid = {'union__bad__parameter': [0, 1, 2]}
+    gs = dcv.GridSearchCV(pipe, grid, refit=False, scoring=None)
+
+    # Check that failure raises if error_score is `'raise'`
+    with pytest.raises(ValueError):
+        gs.fit(X, y)
+
+    # Check that grid scores were set to error_score on failure
+    gs.error_score = float('nan')
+    with pytest.warns(FitFailedWarning):
+        gs.fit(X, y)
+    check_scores_all_nan(gs, 'union__bad__parameter')
+
+
+@ignore_warnings
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
+def test_feature_union_fit_failure_multiple_metrics():
+    scoring = {"score_1": _passthrough_scorer, "score_2": _passthrough_scorer}
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
 
     pipe = Pipeline([('union', FeatureUnion([('good', MockClassifier()),
@@ -474,11 +493,9 @@ def test_feature_union_fit_failure(scoring):
     gs.error_score = float('nan')
     with pytest.warns(FitFailedWarning):
         gs.fit(X, y)
-    if scoring is None:
-        check_scores_all_nan(gs, 'union__bad__parameter')
-    else:
-        for key in scoring:
-            check_scores_all_nan(gs, 'union__bad__parameter', score_key=key)
+
+    for key in scoring:
+        check_scores_all_nan(gs, 'union__bad__parameter', score_key=key)
 
 
 @ignore_warnings

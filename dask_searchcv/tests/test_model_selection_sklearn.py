@@ -236,7 +236,7 @@ def test_no_refit():
     # Test that GSCV can be used for model selection alone without refitting
     clf = MockClassifier()
     grid_search = dcv.GridSearchCV(clf, {'foo_param': [1, 2, 3]}, refit=False)
-    grid_search.fit(da_X, da_y)
+    grid_search.fit(X, y)
     assert (not hasattr(grid_search, "best_estimator_") and
                 hasattr(grid_search, "best_index_") and
                 hasattr(grid_search, "best_params_"))
