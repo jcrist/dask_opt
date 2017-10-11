@@ -698,11 +698,22 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     @property
     def best_params_(self):
         check_is_fitted(self, 'cv_results_')
+        if _HAS_MULTIPLE_METRICS and self.multimetric_:
+            return {
+                k: self.cv_results_['params'][self.best_index_[k]]
+                for k in self.scorer_
+            }
         return self.cv_results_['params'][self.best_index_]
 
     @property
     def best_score_(self):
         check_is_fitted(self, 'cv_results_')
+        if _HAS_MULTIPLE_METRICS and self.multimetric_:
+            return {
+                k: (self.cv_results_['mean_test_{}'.format(k)]
+                    [self.best_index_[k]])
+                for k in self.scorer_
+            }
         return self.cv_results_['mean_test_score'][self.best_index_]
 
     def _check_is_fitted(self, method_name):
@@ -820,14 +831,20 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         out = scheduler(dsk, keys, num_workers=n_jobs)
 
         self.cv_results_ = results = out[0]
-        if self.refit:
-            if self.multimetric_:
-                score_key = self.refit
+        if self.multimetric_:
+            if self.refit:
+                self.best_index_ = np.flatnonzero(
+                    results["rank_test_{}".format(self.refit)] == 1)[0]
             else:
-                score_key = 'score'
+                self.best_index_ = {
+                    k: np.flatnonzero(results["rank_test_{}".format(k)] == 1)[0]
+                    for k in self.scorer_
+                }
+        else:
             self.best_index_ = np.flatnonzero(
-                results["rank_test_{}".format(score_key)] == 1)[0]
+                results["rank_test_score"] == 1)[0]
 
+        if self.refit:
             self.best_estimator_ = out[1]
         return self
 

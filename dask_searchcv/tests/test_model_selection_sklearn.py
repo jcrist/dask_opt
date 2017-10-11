@@ -19,7 +19,8 @@ from sklearn.datasets import (make_classification, make_blobs,
                               make_multilabel_classification)
 from sklearn.exceptions import NotFittedError, FitFailedWarning
 from sklearn.linear_model import Ridge
-from sklearn.metrics import f1_score, make_scorer, roc_auc_score
+from sklearn.metrics import (f1_score, make_scorer, roc_auc_score,
+                             accuracy_score)
 from sklearn.model_selection import (KFold, StratifiedKFold,
                                      StratifiedShuffleSplit, LeaveOneGroupOut,
                                      LeavePGroupsOut, GroupKFold,
@@ -235,7 +236,7 @@ def test_no_refit():
     # Test that GSCV can be used for model selection alone without refitting
     clf = MockClassifier()
     grid_search = dcv.GridSearchCV(clf, {'foo_param': [1, 2, 3]}, refit=False)
-    grid_search.fit(X, y)
+    grid_search.fit(da_X, da_y)
     assert (not hasattr(grid_search, "best_estimator_") and
                 hasattr(grid_search, "best_index_") and
                 hasattr(grid_search, "best_params_"))
@@ -245,6 +246,24 @@ def test_no_refit():
                     'transform', 'inverse_transform'):
         with pytest.raises(NotFittedError) as exc:
             getattr(grid_search, fn_name)(X)
+        assert (('refit=False. %s is available only after refitting on the '
+                 'best parameters' % fn_name) in str(exc.value))
+
+
+def test_no_refit_multiple_metrics():
+    clf = DecisionTreeClassifier()
+    scoring = {'score_1': 'accuracy', 'score_2': 'accuracy'}
+
+    gs = dcv.GridSearchCV(clf, {'max_depth': [1, 2, 3]}, refit=False,
+                          scoring=scoring)
+    gs.fit(da_X, da_y)
+    assert (not hasattr(gs, "best_estimator_") and
+                hasattr(gs, "best_index_") and
+                hasattr(gs, "best_params_"))
+
+    for fn_name in ('predict', 'predict_proba', 'predict_log_proba'):
+        with pytest.raises(NotFittedError) as exc:
+            getattr(gs, fn_name)(X)
         assert (('refit=False. %s is available only after refitting on the '
                  'best parameters' % fn_name) in str(exc.value))
 
@@ -962,9 +981,6 @@ def test_search_train_scores_set_to_false():
 
 @pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
 def test_multiple_metrics():
-    from sklearn.metrics import make_scorer, accuracy_score
-    from sklearn.tree import DecisionTreeClassifier
-
     scoring = {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
 
     # Setting refit='AUC', refits an estimator on the whole dataset with the
