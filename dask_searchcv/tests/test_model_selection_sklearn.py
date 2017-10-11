@@ -250,6 +250,7 @@ def test_no_refit():
                  'best parameters' % fn_name) in str(exc.value))
 
 
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
 def test_no_refit_multiple_metrics():
     clf = DecisionTreeClassifier()
     scoring = {'score_1': 'accuracy', 'score_2': 'accuracy'}

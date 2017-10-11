@@ -22,7 +22,6 @@ from sklearn.datasets import make_classification, load_iris
 from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError, FitFailedWarning
 from sklearn.feature_selection import SelectKBest
-from sklearn.metrics import make_scorer, accuracy_score
 from sklearn.metrics.scorer import _passthrough_scorer
 from sklearn.model_selection import (KFold,
                                      GroupKFold,
@@ -44,6 +43,7 @@ from sklearn.svm import SVC
 import dask_searchcv as dcv
 from dask_searchcv.model_selection import (compute_n_splits, check_cv,
         _normalize_n_jobs, _normalize_scheduler)
+from dask_searchcv._compat import _HAS_MULTIPLE_METRICS
 from dask_searchcv.methods import CVCache
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
@@ -451,7 +451,9 @@ def test_feature_union(weights):
 @ignore_warnings
 @pytest.mark.parametrize("scoring", [
     None,
-    {"score_1": _passthrough_scorer, "score_2": _passthrough_scorer}
+    pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")(
+        {"score_1": _passthrough_scorer, "score_2": _passthrough_scorer}
+    )
 ])
 def test_feature_union_fit_failure(scoring):
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)

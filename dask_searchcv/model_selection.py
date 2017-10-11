@@ -899,7 +899,7 @@ scoring : string, callable, dict of those, or None, default=None
 
     If ``None``, the ``score`` method of the estimator is used.
 
-    A dictionary of ``{scorer_name: string or callable}`` may be
+    A dictionary of ``{{scorer_name: string or callable}}`` may be
     used to evaluate with multiple metrics.
 
 iid : boolean, default=True
@@ -1042,7 +1042,7 @@ best_index_ : int or dict of ints
 
 scorer_ : function or dict of functions
     Scorer function used on the held out data to choose the best
-    parameters for the model. A dictionary of ``{scorer_name: scorer}``
+    parameters for the model. A dictionary of ``{{scorer_name: scorer}}``
     when multiple metrics are used.
 
 n_splits_ : int
