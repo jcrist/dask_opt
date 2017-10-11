@@ -962,8 +962,7 @@ def test_search_train_scores_set_to_false():
 
 @pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
 def test_multiple_metrics():
-    from sklearn.metrics import make_scorer
-    from sklearn.metrics import accuracy_score
+    from sklearn.metrics import make_scorer, accuracy_score
     from sklearn.tree import DecisionTreeClassifier
 
     scoring = {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
@@ -975,7 +974,7 @@ def test_multiple_metrics():
     # ``gs.best_index_``
     gs = dcv.GridSearchCV(DecisionTreeClassifier(random_state=42),
                           param_grid={'min_samples_split': range(2, 403, 10)},
-                          scoring=scoring, cv=5, refit='AUC')
+                          scoring=scoring, cv=5, refit=False)
     gs.fit(da_X, da_y)
     # some basic checks
     assert set(gs.scorer_) == {'AUC', 'Accuracy'}

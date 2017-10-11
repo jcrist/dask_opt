@@ -23,6 +23,7 @@ from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError, FitFailedWarning
 from sklearn.feature_selection import SelectKBest
 from sklearn.metrics import make_scorer, accuracy_score
+from sklearn.metrics.scorer import _passthrough_scorer
 from sklearn.model_selection import (KFold,
                                      GroupKFold,
                                      StratifiedKFold,
@@ -392,11 +393,13 @@ def test_pipeline_sub_estimators():
                                dgs.best_estimator_.named_steps['svc'].coef_)
 
 
-def check_scores_all_nan(gs, bad_param):
+def check_scores_all_nan(gs, bad_param, score_key='score'):
     bad_param = 'param_' + bad_param
     n_candidates = len(gs.cv_results_['params'])
-    assert all(np.isnan([gs.cv_results_['split%d_test_score' % s][cand_i]
-                        for s in range(gs.n_splits_)]).all()
+    keys = ['split{}_test_{}'.format(s, score_key)
+            for s in range(gs.n_splits_)]
+    assert all(np.isnan([gs.cv_results_[key][cand_i]
+                         for key in keys]).all()
                for cand_i in range(n_candidates)
                if gs.cv_results_[bad_param][cand_i] ==
                FailingClassifier.FAILING_PARAMETER)
@@ -448,7 +451,7 @@ def test_feature_union(weights):
 @ignore_warnings
 @pytest.mark.parametrize("scoring", [
     None,
-    {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
+    {"score_1": _passthrough_scorer, "score_2": _passthrough_scorer}
 ])
 def test_feature_union_fit_failure(scoring):
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
@@ -469,8 +472,11 @@ def test_feature_union_fit_failure(scoring):
     gs.error_score = float('nan')
     with pytest.warns(FitFailedWarning):
         gs.fit(X, y)
-
-    check_scores_all_nan(gs, 'union__bad__parameter')
+    if scoring is None:
+        check_scores_all_nan(gs, 'union__bad__parameter')
+    else:
+        for key in scoring:
+            check_scores_all_nan(gs, 'union__bad__parameter', score_key=key)
 
 
 @ignore_warnings

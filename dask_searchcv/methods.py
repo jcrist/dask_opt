@@ -319,11 +319,11 @@ def create_cv_results(scores, candidate_params, n_splits, error_score, weights,
             train_scores = [error_score if s is FIT_FAILURE else s
                             for s in train_scores]
     else:
-        test_scores = {k: [error_score if x[k] is FIT_FAILURE else x[k]
+        test_scores = {k: [error_score if x is FIT_FAILURE else x[k]
                            for x in test_scores]
                        for k in multimetric}
         if train_scores is not None:
-            train_scores = {k: [error_score if x[k] is FIT_FAILURE else x[k]
+            train_scores = {k: [error_score if x is FIT_FAILURE else x[k]
                                 for x in train_scores]
                             for k in multimetric}
 

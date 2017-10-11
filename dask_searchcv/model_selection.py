@@ -820,14 +820,14 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         out = scheduler(dsk, keys, num_workers=n_jobs)
 
         self.cv_results_ = results = out[0]
-        if self.multimetric_:
-            score_key = self.refit
-        else:
-            score_key = 'score'
-        self.best_index_ = np.flatnonzero(
-            results["rank_test_{}".format(score_key)] == 1)[0]
-
         if self.refit:
+            if self.multimetric_:
+                score_key = self.refit
+            else:
+                score_key = 'score'
+            self.best_index_ = np.flatnonzero(
+                results["rank_test_{}".format(score_key)] == 1)[0]
+
             self.best_estimator_ = out[1]
         return self
 
