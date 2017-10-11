@@ -801,7 +801,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             self.multimetric_ = multimetric
 
         else:
-            self.scorer_ = check_scoring(estimator, scoring=self.scoring)
+            scorer = check_scoring(estimator, scoring=self.scoring)
             multimetric = False
 
         self.scorer_ = scorer
