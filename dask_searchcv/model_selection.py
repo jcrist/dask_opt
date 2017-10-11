@@ -792,7 +792,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             Parameters passed to the ``fit`` method of the estimator
         """
         estimator = self.estimator
-        # self.scorer_ = check_scoring(estimator, scoring=self.scoring)
         if _HAS_MULTIPLE_METRICS:
             from sklearn.metrics.scorer import _check_multimetric_scoring
             scorer, multimetric = _check_multimetric_scoring(estimator,
