@@ -892,11 +892,15 @@ estimator : estimator object.
 
 {parameters}
 
-scoring : string, callable or None, default=None
+scoring : string, callable, dict of those, or None, default=None
     A string (see model evaluation documentation) or
     a scorer callable object / function with signature
     ``scorer(estimator, X, y)``.
+
     If ``None``, the ``score`` method of the estimator is used.
+
+    A dictionary of ``{scorer_name: string or callable}`` may be
+    used to evaluate with multiple metrics.
 
 iid : boolean, default=True
     If True, the data is assumed to be identically distributed across
@@ -915,10 +919,13 @@ cv : int, cross-validation generator or an iterable, optional
     either binary or multiclass, ``StratifiedKFold`` is used. In all
     other cases, ``KFold`` is used.
 
-refit : boolean, default=True
+refit : boolean or str, default=True
     Refit the best estimator with the entire dataset.
     If "False", it is impossible to make predictions using
     this {name} instance after fitting.
+
+    When using multiple metrics, this can be the name of the scorer to
+    use for selecting the best estimator.
 
 error_score : 'raise' (default) or numeric
     Value to assign to the score if an error occurs in estimator fitting.
@@ -1012,13 +1019,16 @@ best_estimator_ : estimator
     which gave highest score (or smallest loss if specified)
     on the left out data. Not available if refit=False.
 
-best_score_ : float
+best_score_ : float or dict of floats
     Score of best_estimator on the left out data.
+    When using multiple metrics, ``best_score_`` will be a dictionary
+    where the keys are the names of the scorers, and the values are
+    the mean test score for that scorer.
 
 best_params_ : dict
     Parameter setting that gave the best results on the hold out data.
 
-best_index_ : int
+best_index_ : int or dict of ints
     The index (of the ``cv_results_`` arrays) which corresponds to the best
     candidate parameter setting.
 
@@ -1026,9 +1036,14 @@ best_index_ : int
     the parameter setting for the best model, that gives the highest
     mean score (``search.best_score_``).
 
-scorer_ : function
+    When using multiple metrics, ``best_index_`` will be a dictionary
+    where the keys are the names of the scorers, and the values are
+    the index with the best mean score for that scorer, as described above.
+
+scorer_ : function or dict of functions
     Scorer function used on the held out data to choose the best
-    parameters for the model.
+    parameters for the model. A dictionary of ``{scorer_name: scorer}``
+    when multiple metrics are used.
 
 n_splits_ : int
     The number of cross-validation splits (folds/iterations).
