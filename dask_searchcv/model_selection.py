@@ -107,14 +107,23 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     cv_results = 'cv-results-' + main_token
     candidate_params_name = 'cv-parameters-' + main_token
     dsk[candidate_params_name] = (decompress_params, fields, params)
+    if multimetric:
+        metrics = list(scorer.keys())
+    else:
+        metrics = None
     dsk[cv_results] = (create_cv_results, scores, candidate_params_name,
-                       n_splits, error_score, weights, multimetric)
+                       n_splits, error_score, weights, metrics)
     keys = [cv_results]
 
     if refit:
+        if multimetric:
+            scorer = refit
+        else:
+            scorer = 'score'
+
         best_params = 'best-params-' + main_token
         dsk[best_params] = (get_best_params, candidate_params_name, cv_results,
-                            refit)
+                            scorer)
         best_estimator = 'best-estimator-' + main_token
         if fit_params:
             fit_params = (dict, (zip, list(fit_params.keys()),
@@ -681,10 +690,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.scheduler = scheduler
         self.n_jobs = n_jobs
         self.cache_cv = cache_cv
-        if self.refit in (True, False):
-            self._score_key = 'score'
-        else:
-            self._score_key = self.refit
 
     @property
     def _estimator_type(self):
@@ -779,22 +784,17 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         # self.scorer_ = check_scoring(estimator, scoring=self.scoring)
         if _HAS_MULTIPLE_METRICS:
             from sklearn.metrics.scorer import _check_multimetric_scoring
+            scorer, multimetric = _check_multimetric_scoring(estimator,
+                                                             scoring=self.scoring)
+            if not multimetric:
+                scorer = scorer['score']
+            self.multimetric_ = multimetric
 
-            self.scorer_, self.multimetric_ = _check_multimetric_scoring(
-                estimator, scoring=self.scoring)
         else:
             self.scorer_ = check_scoring(estimator, scoring=self.scoring)
+            multimetric = False
 
-        # This is {None, True, False}
-        # None indicates scikit-learn < 0.19 (when multimetric was added)
-        # True indicates multiple metrics were used
-        # False indicates a single metric was used
-        multimetric = getattr(self, 'multimetric_', None)
-        if multimetric:
-            multimetric = self.scorer_.keys()
-        elif multimetric is False:
-            # sklearn >= 0.19.0, but single metric
-            self.scorer_ = self.scorer_['score']
+        self.scorer_ = scorer
 
         error_score = self.error_score
         if not (isinstance(error_score, numbers.Number) or
@@ -820,8 +820,12 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         out = scheduler(dsk, keys, num_workers=n_jobs)
 
         self.cv_results_ = results = out[0]
+        if self.multimetric_:
+            score_key = self.refit
+        else:
+            score_key = 'score'
         self.best_index_ = np.flatnonzero(
-            results["rank_test_{}".format(self._score_key)] == 1)[0]
+            results["rank_test_{}".format(score_key)] == 1)[0]
 
         if self.refit:
             self.best_estimator_ = out[1]

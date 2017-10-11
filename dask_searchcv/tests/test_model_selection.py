@@ -22,6 +22,7 @@ from sklearn.datasets import make_classification, load_iris
 from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError, FitFailedWarning
 from sklearn.feature_selection import SelectKBest
+from sklearn.metrics import make_scorer, accuracy_score
 from sklearn.model_selection import (KFold,
                                      GroupKFold,
                                      StratifiedKFold,
@@ -46,7 +47,6 @@ from dask_searchcv.methods import CVCache
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
                                       ignore_warnings)
-from dask_searchcv._compat import _HAS_MULTIPLE_METRICS
 
 try:
     from distributed import Client
@@ -446,7 +446,11 @@ def test_feature_union(weights):
 
 
 @ignore_warnings
-def test_feature_union_fit_failure():
+@pytest.mark.parametrize("scoring", [
+    None,
+    {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
+])
+def test_feature_union_fit_failure(scoring):
     X, y = make_classification(n_samples=100, n_features=10, random_state=0)
 
     pipe = Pipeline([('union', FeatureUnion([('good', MockClassifier()),
@@ -455,7 +459,7 @@ def test_feature_union_fit_failure():
                      ('clf', MockClassifier())])
 
     grid = {'union__bad__parameter': [0, 1, 2]}
-    gs = dcv.GridSearchCV(pipe, grid, refit=False)
+    gs = dcv.GridSearchCV(pipe, grid, refit=False, scoring=scoring)
 
     # Check that failure raises if error_score is `'raise'`
     with pytest.raises(ValueError):
@@ -621,39 +625,3 @@ def test_scheduler_param_distributed(loop):
 def test_scheduler_param_bad():
     with pytest.raises(ValueError):
         _normalize_scheduler('threeding', 4)
-
-
-@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
-def test_multiple_metrics():
-    from sklearn.metrics import make_scorer
-    from sklearn.metrics import accuracy_score
-    from sklearn.tree import DecisionTreeClassifier
-
-    X = da_X
-    y = da_y
-
-    scoring = {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
-
-    # Setting refit='AUC', refits an estimator on the whole dataset with the
-    # parameter setting that has the best cross-validated AUC score.
-    # That estimator is made available at ``gs.best_estimator_`` along with
-    # parameters like ``gs.best_score_``, ``gs.best_parameters_`` and
-    # ``gs.best_index_``
-    gs = dcv.GridSearchCV(DecisionTreeClassifier(random_state=42),
-                          param_grid={'min_samples_split': range(2, 403, 10)},
-                          scoring=scoring, cv=5, refit='AUC')
-    gs.fit(X, y)
-    # some basic checks
-    assert set(gs.scorer_) == {'AUC', 'Accuracy'}
-    cv_results = gs.cv_results_.keys()
-    assert 'split0_test_AUC' in cv_results
-    assert 'split0_train_AUC' in cv_results
-
-    assert 'split0_test_Accuracy' in cv_results
-    assert 'split0_test_Accuracy' in cv_results
-
-    assert 'mean_train_AUC' in cv_results
-    assert 'mean_train_Accuracy' in cv_results
-
-    assert 'std_train_AUC' in cv_results
-    assert 'std_train_Accuracy' in cv_results

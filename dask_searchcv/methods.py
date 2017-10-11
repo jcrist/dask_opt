@@ -1,7 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 import warnings
-from collections import defaultdict
+from collections import defaultdict, Mapping
 from threading import Lock
 from timeit import default_timer
 from distutils.version import LooseVersion
@@ -252,7 +252,7 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
 def _score(est, X, y, scorer):
     if est is FIT_FAILURE:
         return FIT_FAILURE
-    if isinstance(scorer, dict):
+    if isinstance(scorer, Mapping):
         return {k: v(est, X) if y is None else v(est, X, y)
                 for k, v in scorer.items()}
     return scorer(est, X) if y is None else scorer(est, X, y)
@@ -319,8 +319,13 @@ def create_cv_results(scores, candidate_params, n_splits, error_score, weights,
             train_scores = [error_score if s is FIT_FAILURE else s
                             for s in train_scores]
     else:
-        test_scores = {k: [x[k] for x in test_scores] for k in multimetric}
-        train_scores = {k: [x[k] for x in train_scores] for k in multimetric}
+        test_scores = {k: [error_score if x[k] is FIT_FAILURE else x[k]
+                           for x in test_scores]
+                       for k in multimetric}
+        if train_scores is not None:
+            train_scores = {k: [error_score if x[k] is FIT_FAILURE else x[k]
+                                for x in train_scores]
+                            for k in multimetric}
 
     # Construct the `cv_results_` dictionary
     results = {'params': candidate_params}
@@ -335,10 +340,10 @@ def create_cv_results(scores, candidate_params, n_splits, error_score, weights,
 
     if not multimetric:
         _store(results, 'test_score', test_scores, n_splits, n_candidates,
-            splits=True, rank=True, weights=weights)
+               splits=True, rank=True, weights=weights)
         if train_scores is not None:
             _store(results, 'train_score', train_scores,
-                n_splits, n_candidates, splits=True)
+                   n_splits, n_candidates, splits=True)
     else:
         for key in multimetric:
             _store(results, 'test_{}'.format(key), test_scores[key], n_splits,
@@ -363,8 +368,6 @@ def create_cv_results(scores, candidate_params, n_splits, error_score, weights,
 
 
 def get_best_params(candidate_params, cv_results, scorer):
-    if scorer is True:
-        scorer = 'score'
     best_index = np.flatnonzero(
         cv_results["rank_test_{}".format(scorer)] == 1)[0]
     return candidate_params[best_index]

@@ -34,6 +34,7 @@ import dask_searchcv as dcv
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       CheckingClassifier, MockDataFrame,
                                       ignore_warnings)
+from dask_searchcv._compat import _HAS_MULTIPLE_METRICS
 
 
 class LinearSVCNoScore(LinearSVC):
@@ -45,6 +46,9 @@ class LinearSVCNoScore(LinearSVC):
 
 X = np.array([[-1, -1], [-2, -1], [1, 1], [2, 1]])
 y = np.array([1, 1, 2, 2])
+
+da_X = da.from_array(np.random.normal(size=(20, 3)), chunks=(3, 3))
+da_y = da.from_array(np.random.randint(2, size=20), chunks=3)
 
 
 def assert_grid_iter_equals_getitem(grid):
@@ -954,3 +958,36 @@ def test_search_train_scores_set_to_false():
     gs = dcv.GridSearchCV(clf, param_grid={'C': [0.1, 0.2]},
                           return_train_score=False)
     gs.fit(X, y)
+
+
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
+def test_multiple_metrics():
+    from sklearn.metrics import make_scorer
+    from sklearn.metrics import accuracy_score
+    from sklearn.tree import DecisionTreeClassifier
+
+    scoring = {'AUC': 'roc_auc', 'Accuracy': make_scorer(accuracy_score)}
+
+    # Setting refit='AUC', refits an estimator on the whole dataset with the
+    # parameter setting that has the best cross-validated AUC score.
+    # That estimator is made available at ``gs.best_estimator_`` along with
+    # parameters like ``gs.best_score_``, ``gs.best_parameters_`` and
+    # ``gs.best_index_``
+    gs = dcv.GridSearchCV(DecisionTreeClassifier(random_state=42),
+                          param_grid={'min_samples_split': range(2, 403, 10)},
+                          scoring=scoring, cv=5, refit='AUC')
+    gs.fit(da_X, da_y)
+    # some basic checks
+    assert set(gs.scorer_) == {'AUC', 'Accuracy'}
+    cv_results = gs.cv_results_.keys()
+    assert 'split0_test_AUC' in cv_results
+    assert 'split0_train_AUC' in cv_results
+
+    assert 'split0_test_Accuracy' in cv_results
+    assert 'split0_test_Accuracy' in cv_results
+
+    assert 'mean_train_AUC' in cv_results
+    assert 'mean_train_Accuracy' in cv_results
+
+    assert 'std_train_AUC' in cv_results
+    assert 'std_train_Accuracy' in cv_results
