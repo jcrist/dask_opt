@@ -691,6 +691,11 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         self.n_jobs = n_jobs
         self.cache_cv = cache_cv
 
+    def _check_if_refit(self, attr):
+        if not self.refit:
+            raise AttributeError(
+                "'{}' is not a valid attribute with 'refit=False'.".format(attr))
+
     @property
     def _estimator_type(self):
         return self.estimator._estimator_type
@@ -698,7 +703,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     @property
     def best_params_(self):
         check_is_fitted(self, 'cv_results_')
-        if _HAS_MULTIPLE_METRICS and self.multimetric_:
+        self._check_if_refit('best_params_')
+        if _HAS_MULTIPLE_METRICS and self.multimetric_ and not self.refit:
             return {
                 k: self.cv_results_['params'][self.best_index_[k]]
                 for k in self.scorer_
@@ -708,6 +714,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     @property
     def best_score_(self):
         check_is_fitted(self, 'cv_results_')
+        self._check_if_refit('best_score_')
         if _HAS_MULTIPLE_METRICS and self.multimetric_:
             return {
                 k: (self.cv_results_['mean_test_{}'.format(k)]

@@ -237,9 +237,10 @@ def test_no_refit():
     clf = MockClassifier()
     grid_search = dcv.GridSearchCV(clf, {'foo_param': [1, 2, 3]}, refit=False)
     grid_search.fit(X, y)
-    assert (not hasattr(grid_search, "best_estimator_") and
-                hasattr(grid_search, "best_index_") and
-                hasattr(grid_search, "best_params_"))
+    assert not hasattr(grid_search, "best_estimator_")
+    assert not hasattr(grid_search, "best_index_")
+    assert not hasattr(grid_search, "best_score_")
+    assert not hasattr(grid_search, "best_params_")
 
     # Make sure the predict/transform etc fns raise meaningfull error msg
     for fn_name in ('predict', 'predict_proba', 'predict_log_proba',
@@ -258,9 +259,10 @@ def test_no_refit_multiple_metrics():
     gs = dcv.GridSearchCV(clf, {'max_depth': [1, 2, 3]}, refit=False,
                           scoring=scoring)
     gs.fit(da_X, da_y)
-    assert (not hasattr(gs, "best_estimator_") and
-                hasattr(gs, "best_index_") and
-                hasattr(gs, "best_params_"))
+    assert not hasattr(gs, "best_estimator_")
+    assert not hasattr(gs, "best_index_")
+    assert not hasattr(gs, "best_score_")
+    assert not hasattr(gs, "best_params_")
 
     for fn_name in ('predict', 'predict_proba', 'predict_log_proba'):
         with pytest.raises(NotFittedError) as exc:
