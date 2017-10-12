@@ -21,6 +21,7 @@ from dask.utils import tmpdir
 from sklearn.datasets import make_classification, load_iris
 from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError, FitFailedWarning
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectKBest
 from sklearn.metrics.scorer import _passthrough_scorer
 from sklearn.model_selection import (KFold,
@@ -650,3 +651,46 @@ def test_scheduler_param_distributed(loop):
 def test_scheduler_param_bad():
     with pytest.raises(ValueError):
         _normalize_scheduler('threeding', 4)
+
+
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
+def test_cv_multiplemetrics():
+    X, y = make_classification(random_state=0)
+
+    param_grid = {'max_depth': [1, 5]}
+    a = dcv.GridSearchCV(RandomForestClassifier(), param_grid, refit='score1',
+                         scoring={'score1': 'accuracy', 'score2': 'accuracy'})
+    b = GridSearchCV(RandomForestClassifier(), param_grid, refit='score1',
+                     scoring={'score1': 'accuracy', 'score2': 'accuracy'})
+    a.fit(X, y)
+    b.fit(X, y)
+
+    assert a.best_score_ > 0
+    assert isinstance(a.best_index_, type(b.best_index_))
+    assert isinstance(a.best_params_, type(b.best_params_))
+
+
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
+def test_cv_multiplemetrics_requires_refit_metric():
+    X, y = make_classification(random_state=0)
+
+    param_grid = {'max_depth': [1, 5]}
+    a = dcv.GridSearchCV(RandomForestClassifier(), param_grid, refit=True,
+                         scoring={'score1': 'accuracy', 'score2': 'accuracy'})
+
+    with pytest.raises(ValueError):
+        a.fit(X, y)
+
+
+@pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
+def test_cv_multiplemetrics_no_refit():
+    X, y = make_classification(random_state=0)
+
+    param_grid = {'max_depth': [1, 5]}
+    a = dcv.GridSearchCV(RandomForestClassifier(), param_grid, refit=False,
+                         scoring={'score1': 'accuracy', 'score2': 'accuracy'})
+    b = GridSearchCV(RandomForestClassifier(), param_grid, refit=False,
+                     scoring={'score1': 'accuracy', 'score2': 'accuracy'})
+    assert hasattr(a, 'best_index_') is hasattr(b, 'best_index_')
+    assert hasattr(a, 'best_estimator_') is hasattr(b, 'best_estimator_')
+    assert hasattr(a, 'best_score_') is hasattr(b, 'best_score_')

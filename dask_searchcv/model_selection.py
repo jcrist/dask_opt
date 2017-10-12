@@ -704,11 +704,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     def best_params_(self):
         check_is_fitted(self, 'cv_results_')
         self._check_if_refit('best_params_')
-        if _HAS_MULTIPLE_METRICS and self.multimetric_ and not self.refit:
-            return {
-                k: self.cv_results_['params'][self.best_index_[k]]
-                for k in self.scorer_
-            }
         return self.cv_results_['params'][self.best_index_]
 
     @property
@@ -716,12 +711,10 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         check_is_fitted(self, 'cv_results_')
         self._check_if_refit('best_score_')
         if _HAS_MULTIPLE_METRICS and self.multimetric_:
-            return {
-                k: (self.cv_results_['mean_test_{}'.format(k)]
-                    [self.best_index_[k]])
-                for k in self.scorer_
-            }
-        return self.cv_results_['mean_test_score'][self.best_index_]
+            key = self.refit
+        else:
+            key = 'score'
+        return self.cv_results_['mean_test_{}'.format(key)][self.best_index_]
 
     def _check_is_fitted(self, method_name):
         if not self.refit:
@@ -807,6 +800,19 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                 scorer = scorer['score']
             self.multimetric_ = multimetric
 
+            if self.multimetric_:
+                if self.refit is not False and (
+                        not isinstance(self.refit, str) or
+                        # This will work for both dict / list (tuple)
+                        self.refit not in scorer):
+                    raise ValueError("For multi-metric scoring, the parameter "
+                                    "refit must be set to a scorer key "
+                                    "to refit an estimator with the best "
+                                    "parameter setting on the whole data and "
+                                    "make the best_* attributes "
+                                    "available for that metric. If this is not "
+                                    "needed, refit should be set to False "
+                                    "explicitly. %r was passed." % self.refit)
         else:
             scorer = check_scoring(estimator, scoring=self.scoring)
             multimetric = False
@@ -837,20 +843,14 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         out = scheduler(dsk, keys, num_workers=n_jobs)
 
         self.cv_results_ = results = out[0]
-        if _HAS_MULTIPLE_METRICS and self.multimetric_:
-            if self.refit:
-                self.best_index_ = np.flatnonzero(
-                    results["rank_test_{}".format(self.refit)] == 1)[0]
-            else:
-                self.best_index_ = {
-                    k: np.flatnonzero(results["rank_test_{}".format(k)] == 1)[0]
-                    for k in self.scorer_
-                }
-        else:
-            self.best_index_ = np.flatnonzero(
-                results["rank_test_score"] == 1)[0]
-
         if self.refit:
+            if _HAS_MULTIPLE_METRICS and self.multimetric_:
+                key = self.refit
+            else:
+                key = 'score'
+            self.best_index_ = np.flatnonzero(
+                results["rank_test_{}".format(key)] == 1)[0]
+
             self.best_estimator_ = out[1]
         return self
 

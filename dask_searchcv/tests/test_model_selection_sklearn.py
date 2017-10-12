@@ -993,7 +993,7 @@ def test_multiple_metrics():
     # ``gs.best_index_``
     gs = dcv.GridSearchCV(DecisionTreeClassifier(random_state=42),
                           param_grid={'min_samples_split': range(2, 403, 10)},
-                          scoring=scoring, cv=5, refit=False)
+                          scoring=scoring, cv=5, refit='AUC')
     gs.fit(da_X, da_y)
     # some basic checks
     assert set(gs.scorer_) == {'AUC', 'Accuracy'}
