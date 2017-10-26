@@ -72,6 +72,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     is_pairwise = getattr(estimator, '_pairwise', False)
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
     n_splits = compute_n_splits(cv, X, y, groups)
+    print('X_name, y_name, n_splits, is_pairwise, X, y, groups', X_name, y_name, n_splits, is_pairwise, X, y, groups)
     if fit_params:
         # A mapping of {name: (name, graph-key)}
         param_values = to_indexable(*fit_params.values(), allow_scalars=True)
@@ -79,7 +80,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                       zip(fit_params, to_keys(dsk, *param_values))}
     else:
         fit_params = {}
-
+    print('fit_params', fit_params)
     fields, tokens, params = normalize_params(candidate_params)
     main_token = tokenize(normalize_estimator(estimator), fields, params,
                           X_name, y_name, groups_name, fit_params, cv,
@@ -118,7 +119,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
         dsk[best_estimator] = (fit_best, clone(estimator), best_params,
                                X_name, y_name, fit_params)
         keys.append(best_estimator)
-
+    print('dsk,keys, n_splits', dsk,keys, n_splits)
     return dsk, keys, n_splits
 
 
@@ -232,8 +233,10 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
 
 def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
            fit_params, n_splits, error_score):
+    print('do_fit', dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
+           fit_params, n_splits, error_score)
     if is_pipeline(est) and params is not None:
-        #print('pppp', params)
+        print('pppp', params)
         return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
                             Xs, ys, fit_params, n_splits, error_score, False)
     else:
@@ -528,6 +531,7 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                                     params, Xs, ys, fit_params, n_splits,
                                     error_score, step_fields_lk, fit_params_lk,
                                     field_to_index, step_name, False, True)
+        print('fitts outs', fits, out_Xs)
         fit_steps.append(fits)
         tr_Xs.append(out_Xs)
 
@@ -561,6 +565,7 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     seen = {}
     for steps, Xs, wt, (w, wl), nsamp in zip(zip(*fit_steps), zip(*tr_Xs),
                                              weight_tokens, weights, n_samples):
+        print('sX,w,wwl, nsamp', steps, Xs, wt, (w, wl), nsamp)
         if (steps, wt) in seen:
             out_append(seen[steps, wt])
         else:
@@ -810,7 +815,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                                           cache_cv=self.cache_cv)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
-
+        print('fit vars(self)', vars(self))
         n_jobs = _normalize_n_jobs(self.n_jobs)
         scheduler = _normalize_scheduler(self.scheduler, n_jobs)
 

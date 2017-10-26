@@ -9,7 +9,6 @@ from sklearn.utils.validation import indexable, _is_arraylike
 from sklearn.pipeline import Pipeline as sk_Pipeline
 
 def is_pipeline(estimator):
-    print('is_pipeline', estimator)
     if isinstance(estimator, sk_Pipeline):
         ret = True
     try:
@@ -17,7 +16,6 @@ def is_pipeline(estimator):
         ret = isinstance(estimator, elm_Pipeline)
     except:
         ret = False
-    print('is_pipeline', estimator, ret)
     return ret
 
 def _get_est_type(est):
