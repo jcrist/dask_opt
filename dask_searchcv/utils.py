@@ -1,3 +1,4 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
 import copy
 
 import dask.array as da
@@ -5,6 +6,27 @@ from dask.base import Base, tokenize
 from dask.delayed import delayed, Delayed
 
 from sklearn.utils.validation import indexable, _is_arraylike
+from sklearn.pipeline import Pipeline as sk_Pipeline
+
+def is_pipeline(estimator):
+    print('is_pipeline', estimator)
+    if isinstance(estimator, sk_Pipeline):
+        ret = True
+    try:
+        from elm.pipeline import Pipeline as elm_Pipeline
+        ret = isinstance(estimator, elm_Pipeline)
+    except:
+        ret = False
+    print('is_pipeline', estimator, ret)
+    return ret
+
+def _get_est_type(est):
+    if hasattr(est, '_cls') and hasattr(est._cls, '__name__'):
+        est_type = est._cls.__name__.lower()
+    else:
+        est_type = type(est).__name__.lower()
+    print('_get_est_type', est_type)
+    return est_type
 
 
 def _indexable(x):

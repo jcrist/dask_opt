@@ -38,7 +38,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       cv_n_samples, cv_extract, cv_extract_params,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
-from .utils import to_indexable, to_keys, unzip
+from .utils import to_indexable, to_keys, unzip, is_pipeline,_get_est_type
 
 try:
     from cytoolz import get, pluck
@@ -62,18 +62,16 @@ class TokenIterator(object):
 
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
-                groups=None, fit_params=None, iid=True, refit=True,
-                error_score='raise', return_train_score=True, cache_cv=True):
-
+                groups=None, sampler=None, fit_params=None, iid=True, refit=True,
+                error_score='raise', return_train_score=True,
+                cache_cv=True):
+    dsk = {}
+    # "pairwise" estimators require a different graph for CV splitting
     X, y, groups = to_indexable(X, y, groups)
     cv = check_cv(cv, y, is_classifier(estimator))
-    # "pairwise" estimators require a different graph for CV splitting
     is_pairwise = getattr(estimator, '_pairwise', False)
-
-    dsk = {}
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
     n_splits = compute_n_splits(cv, X, y, groups)
-
     if fit_params:
         # A mapping of {name: (name, graph-key)}
         param_values = to_indexable(*fit_params.values(), allow_scalars=True)
@@ -88,8 +86,9 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                           error_score == 'raise', return_train_score)
 
     cv_name = 'cv-split-' + main_token
+
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
-                    is_pairwise, cache_cv)
+                    is_pairwise, cache_cv, sampler)
 
     if iid:
         weights = 'cv-n-samples-' + main_token
@@ -162,13 +161,18 @@ def _group_fit_params(steps, fit_params):
 def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
                      X, y, fit_params, n_splits, error_score, scorer,
                      return_train_score):
-    if not isinstance(est, Pipeline):
+    print('do_fit_and_score', dsk, main_token, est, cv, fields, tokens, params,
+           X, y, fit_params, n_splits, error_score, scorer,
+           return_train_score)
+    if not is_pipeline(est):
         # Fitting and scoring can all be done as a single task
+        print('not pipeline')
         n_and_fit_params = _get_fit_params(cv, fit_params, n_splits)
 
-        est_type = type(est).__name__.lower()
+        est_type = _get_est_type(est)
         est_name = '%s-%s' % (est_type, main_token)
         score_name = '%s-fit-score-%s' % (est_type, main_token)
+        print('score_name', score_name)
         dsk[est_name] = est
 
         seen = {}
@@ -190,6 +194,7 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
                 m += 1
         scores = [k + (n,) for n in range(n_splits) for k in out]
     else:
+        print('pipeline', cv, X, y)
         X_train = (cv_extract, cv, X, y, True, True)
         X_test = (cv_extract, cv, X, y, True, False)
         y_train = (cv_extract, cv, X, y, False, True)
@@ -198,15 +203,17 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
         # Fit the estimator on the training data
         X_trains = [X_train] * len(params)
         y_trains = [y_train] * len(params)
+        print('xtyt', X_trains, y_trains, est, cv, error_score)
         fit_ests = do_fit(dsk, TokenIterator(main_token), est, cv,
                           fields, tokens, params, X_trains, y_trains,
                           fit_params, n_splits, error_score)
-
+        print('fit_ests', fit_ests)
         score_name = 'score-' + main_token
 
         scores = []
         scores_append = scores.append
         for n in range(n_splits):
+            print('n', n)
             if return_train_score:
                 xtrain = X_train + (n,)
                 ytrain = y_train + (n,)
@@ -215,7 +222,7 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
 
             xtest = X_test + (n,)
             ytest = y_test + (n,)
-
+            print('xtyt2222', xtest, ytest)
             for (name, m) in fit_ests:
                 dsk[(score_name, m, n)] = (score, (name, m, n), xtest, ytest,
                                            xtrain, ytrain, scorer)
@@ -225,7 +232,8 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
 
 def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
            fit_params, n_splits, error_score):
-    if isinstance(est, Pipeline) and params is not None:
+    if is_pipeline(est) and params is not None:
+        #print('pppp', params)
         return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
                             Xs, ys, fit_params, n_splits, error_score, False)
     else:
@@ -236,7 +244,7 @@ def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             fields = None
 
         token = next_token(est)
-        est_type = type(est).__name__.lower()
+        est_type = _get_est_type(est)
         est_name = '%s-%s' % (est_type, token)
         fit_name = '%s-fit-%s' % (est_type, token)
         dsk[est_name] = est
@@ -263,7 +271,7 @@ def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
 
 def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                      fit_params, n_splits, error_score):
-    if isinstance(est, Pipeline) and params is not None:
+    if is_pipeline(est) and params is not None:
         return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
                             Xs, ys, fit_params, n_splits, error_score, True)
     elif isinstance(est, FeatureUnion) and params is not None:
@@ -292,9 +300,11 @@ def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
 
         for X, y, t, p in zip(Xs, ys, tokens, params):
             if (X, y, t) in seen:
+                print('seen', seen)
                 out_append(seen[X, y, t])
             else:
                 for n, fit_params in n_and_fit_params:
+                    print('nfppp', n, fit_params)
                     dsk[(fit_Xt_name, m, n)] = (fit_transform, est_name,
                                                 X + (n,), y + (n,),
                                                 error_score, fields, p,
@@ -343,7 +353,12 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
                  is_transform):
     sub_fields, sub_inds = map(list, unzip(step_fields_lk[step_name], 2))
     sub_fit_params = fit_params_lk[step_name]
-
+    print('sssss', sub_fields, sub_inds, sub_fit_params, step_name in field_to_index, step_name, field_to_index)
+    nnn = '''next_token, step, cv, fields, tokens, params, Xs, ys,fit_params, n_splits, error_score, step_fields_lk,fit_params_lk, field_to_index, step_name, none_passthrough,is_transform'''.split(',')
+    print(dict(zip(nnn, (next_token, step, cv, fields, tokens, params, Xs, ys,
+                 fit_params, n_splits, error_score, step_fields_lk,
+                 fit_params_lk, field_to_index, step_name, none_passthrough,
+                 is_transform))))
     if step_name in field_to_index:
         # The estimator may change each call
         new_fits = {}
@@ -351,12 +366,14 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
         est_index = field_to_index[step_name]
 
         for ids in _group_ids_by_index(est_index, tokens):
+            print('ids', ids)
             # Get the estimator for this subgroup
             sub_est = params[ids[0]][est_index]
             if sub_est is MISSING:
                 sub_est = step
 
             # If an estimator is `None`, there's nothing to do
+            print('nffff', new_fits)
             if sub_est is None:
                 nones = dict.fromkeys(ids, None)
                 new_fits.update(nones)
@@ -377,6 +394,7 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
                     sub_tokens = sub_params = None
 
                 if is_transform:
+                    print('do_fit_transform')
                     sub_fits, sub_Xs = do_fit_transform(dsk, next_token,
                                                         sub_est, cv, sub_fields,
                                                         sub_tokens, sub_params,
@@ -386,6 +404,7 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
                     new_Xs.update(zip(ids, sub_Xs))
                     new_fits.update(zip(ids, sub_fits))
                 else:
+                    print('do_fit')
                     sub_fits = do_fit(dsk, next_token, sub_est, cv,
                                         sub_fields, sub_tokens, sub_params,
                                         sub_Xs, sub_ys, sub_fit_params,
@@ -425,22 +444,24 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                  fit_params, n_splits, error_score, is_transform):
     if 'steps' in fields:
         raise NotImplementedError("Setting Pipeline.steps in a gridsearch")
-
+    print('fiessss', fields, est, cv, params, fit_params, est.steps)
     field_to_index, step_fields_lk = _group_subparams(est.steps, fields)
     fit_params_lk = _group_fit_params(est.steps, fit_params)
-
+    print('lllllk', fit_params_lk)
     # A list of (step, is_transform)
     instrs = [(s, True) for s in est.steps[:-1]]
     instrs.append((est.steps[-1], is_transform))
-
+    print('insss', instrs)
     fit_steps = []
     for (step_name, step), transform in instrs:
+     #   print('stepn', step_name, step, transform)
         fits, Xs = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
                                 params, Xs, ys, fit_params, n_splits,
                                 error_score, step_fields_lk, fit_params_lk,
                                 field_to_index, step_name, True, transform)
         fit_steps.append(fits)
-
+        print('ftt', fits)
+    print('lennnn', len(fit_steps), fit_steps)
     # Rebuild the pipelines
     step_names = [n for n, _ in est.steps]
     out_ests = []
@@ -449,7 +470,9 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     m = 0
     seen = {}
     for steps in zip(*fit_steps):
+        print('stepssss', steps, seen)
         if steps in seen:
+           # print('continue')
             out_ests_append(seen[steps])
         else:
             for n in range(n_splits):
@@ -775,10 +798,11 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                 error_score == 'raise'):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
-
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
                                           list(self._get_param_iterator()),
-                                          X, y, groups, fit_params,
+                                          X=X, y=y, groups=groups,
+                                          sampler=self.sampler,
+                                          fit_params=fit_params,
                                           iid=self.iid,
                                           refit=self.refit,
                                           error_score=error_score,
@@ -893,11 +917,12 @@ n_jobs : int, default=-1
     distributed schedulers. If ``n_jobs == -1`` [default] all cpus are used.
     For ``n_jobs < -1``, ``(n_cpus + 1 + n_jobs)`` are used.
 
-cache_cv : bool, default=True
+cache_cv : bool or CVCache-like class, default=True
     Whether to extract each train/test subset at most once in each worker
     process, or every time that subset is needed. Caching the splits can
     speedup computation at the cost of increased memory usage per worker
-    process.
+    process.  If cache_cv is a class, then it is used in place of CVCache
+    (and extraction is assumed to be at most once).
 
     If True, worst case memory usage is ``(n_splits + 1) * (X.nbytes +
     y.nbytes)`` per worker. If False, worst case memory usage is
@@ -1055,6 +1080,7 @@ class GridSearchCV(DaskBaseSearchCV):
         self.param_grid = param_grid
 
     def _get_param_iterator(self):
+        print('get')
         """Return ParameterGrid instance for the given param_grid"""
         return model_selection.ParameterGrid(self.param_grid)
 
