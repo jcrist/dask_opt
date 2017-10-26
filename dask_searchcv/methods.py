@@ -83,19 +83,15 @@ class CVCache(object):
         self.splits = splits
         self.pairwise = pairwise
         self.cache = {} if cache else None
-        print('CVCache', vars(self))
 
     def __reduce__(self):
-        print('reduce')
         return (CVCache, (self.splits, self.pairwise, self.cache is not None))
 
     def num_test_samples(self):
-        print('num_test_samples')
         return np.array([i.sum() if i.dtype == bool else len(i)
                          for i in pluck(1, self.splits)])
 
     def extract(self, X, y, n, is_x=True, is_train=True):
-        print('extract')
         if is_x:
             if self.pairwise:
                 return self._extract_pairwise(X, y, n, is_train=is_train)
@@ -105,7 +101,6 @@ class CVCache(object):
         return self._extract(X, y, n, is_x=False, is_train=is_train)
 
     def extract_param(self, key, x, n):
-        print('extract_param', key, x, n)
         if self.cache is not None and (n, key) in self.cache:
             return self.cache[n, key]
 
@@ -116,24 +111,20 @@ class CVCache(object):
         return out
 
     def _extract(self, X, y, n, is_x=True, is_train=True):
-        print('_extract', X, y, n, is_x, is_train)
         if self.cache is not None and (n, is_x, is_train) in self.cache:
             return self.cache[n, is_x, is_train]
 
         inds = self.splits[n][0] if is_train else self.splits[n][1]
         post_splits = getattr(self, '_post_splits', None)
-        print('post', post_splits)
         if post_splits:
-            result = post_splits(inds)
+            result = post_splits(np.array(X)[inds])
         else:
             result = safe_indexing(X if is_x else y, inds)
-        print('result')
         if self.cache is not None:
             self.cache[n, is_x, is_train] = result
         return result
 
     def _extract_pairwise(self, X, y, n, is_train=True):
-        print('pairwise', X, y, n, is_train)
         if self.cache is not None and (n, True, is_train) in self.cache:
             return self.cache[n, True, is_train]
 
@@ -144,7 +135,6 @@ class CVCache(object):
             raise ValueError("X should be a square kernel matrix")
         train, test = self.splits[n]
         post_splits = getattr(self, '_post_splits', None)
-        print('post_splits', post_splits)
         result = X[np.ix_(train if is_train else test, train)]
         if post_splits:
             result = post_splits(result)
@@ -154,18 +144,15 @@ class CVCache(object):
 
 
 def cv_split(cv, X, y, groups, is_pairwise, cache, sampler):
-    print('cv, X, y, groups, is_pairwise, cache, sampler', cv, X, y, groups, is_pairwise, cache, sampler)
     kw = dict(pairwise=is_pairwise, cache=cache)
     if sampler is None:
         _check_consistent_length(X, y, groups)
     if cache and not hasattr(cache, 'extract'):
         cls = CVCache
-        kw.pop('sampler')
     else:
         cls = cache
         kw['cache'] = True
     splits = list(cv.split(X, y, groups))
-    print('cls', cls, splits, kw, sampler)
     if sampler:
         args = (sampler, splits,)
     else:
@@ -244,13 +231,11 @@ def set_params(est, fields=None, params=None, copy=True):
     # TODO: rewrite set_params to avoid lock for classes that use the standard
     # set_params/get_params methods
     with SET_PARAMS_LOCK:
-        #print('params sp', fields, est, params)
         return est.set_params(**params)
 
 
 def fit(est, X, y, error_score='raise', fields=None, params=None,
         fit_params=None):
-    #print('estxxxx', est, X, y, fields, params, fit_params)
     if X is FIT_FAILURE:
         est, fit_time = FIT_FAILURE, 0.0
     else:
@@ -272,7 +257,6 @@ def fit(est, X, y, error_score='raise', fields=None, params=None,
 
 def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
                   fit_params=None):
-    print('estftxxx', est, fields, params, fit_params)
     if X is FIT_FAILURE:
         est, fit_time, Xt = FIT_FAILURE, 0.0, FIT_FAILURE
     else:
@@ -316,9 +300,6 @@ def score(est_and_time, X_test, y_test, X_train, y_train, scorer):
 def fit_and_score(est, cv, X, y, n, scorer,
                   error_score='raise', fields=None, params=None,
                   fit_params=None, return_train_score=True):
-    print('fit_and_score', est, cv, X, y, n, scorer,
-                  error_score, fields, params,
-                  fit_params, return_train_score)
     X_train = cv.extract(X, y, n, True, True)
     y_train = cv.extract(X, y, n, False, True)
     X_test = cv.extract(X, y, n, True, False)
@@ -352,7 +333,7 @@ def _store(results, key_name, array, n_splits, n_candidates,
 
 
 def create_cv_results(scores, candidate_params, n_splits, error_score, weights):
-    print('scores, candidate_params, n_splits, error_score, weights', scores, candidate_params, n_splits, error_score, weights)
+
     if len(scores[0]) == 4:
         fit_times, test_scores, score_times, train_scores = zip(*scores)
     else:

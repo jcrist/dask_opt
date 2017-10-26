@@ -19,11 +19,10 @@ def is_pipeline(estimator):
     return ret
 
 def _get_est_type(est):
-    if hasattr(est, '_cls') and hasattr(est._cls, '__name__'):
-        est_type = est._cls.__name__.lower()
+    if hasattr(est, '_cls_name'):
+        est_type = est._cls_name.lower()
     else:
         est_type = type(est).__name__.lower()
-    print('_get_est_type', est_type)
     return est_type
 
 
