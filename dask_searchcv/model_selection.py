@@ -8,7 +8,7 @@ import numbers
 
 import numpy as np
 import dask
-from dask.base import tokenize, Base
+from dask.base import tokenize, is_dask_collection
 from dask.delayed import delayed
 from dask.threaded import get as threaded_get
 from dask.utils import derived_from
@@ -558,7 +558,7 @@ def check_cv(cv=3, y=None, classifier=False):
 
     # If ``cv`` is not an integer, the scikit-learn implementation doesn't
     # touch the ``y`` object, so passing on a dask object is fine
-    if not isinstance(y, Base) or not isinstance(cv, numbers.Integral):
+    if not is_dask_collection(y) or not isinstance(cv, numbers.Integral):
         return model_selection.check_cv(cv, y, classifier)
 
     if classifier:
@@ -581,7 +581,7 @@ def compute_n_splits(cv, X, y=None, groups=None):
     -------
     n_splits : int
     """
-    if not any(isinstance(i, Base) for i in (X, y, groups)):
+    if not any(is_dask_collection(i) for i in (X, y, groups)):
         return cv.get_n_splits(X, y, groups)
 
     if isinstance(cv, (_BaseKFold, BaseShuffleSplit)):
@@ -593,12 +593,12 @@ def compute_n_splits(cv, X, y=None, groups=None):
     elif isinstance(cv, _CVIterableWrapper):
         return len(cv.cv)
 
-    elif isinstance(cv, (LeaveOneOut, LeavePOut)) and not isinstance(X, Base):
+    elif isinstance(cv, (LeaveOneOut, LeavePOut)) and not is_dask_collection(X):
         # Only `X` is referenced for these classes
         return cv.get_n_splits(X, None, None)
 
     elif (isinstance(cv, (LeaveOneGroupOut, LeavePGroupsOut)) and not
-          isinstance(groups, Base)):
+          is_dask_collection(groups)):
         # Only `groups` is referenced for these classes
         return cv.get_n_splits(None, None, groups)
 
