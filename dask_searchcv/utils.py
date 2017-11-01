@@ -1,10 +1,29 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
 import copy
 
 import dask.array as da
-from dask.base import Base, tokenize
+from dask.base import is_dask_collection, tokenize
 from dask.delayed import delayed, Delayed
 
 from sklearn.utils.validation import indexable, _is_arraylike
+from sklearn.pipeline import Pipeline as sk_Pipeline
+
+def is_pipeline(estimator):
+    if isinstance(estimator, sk_Pipeline):
+        ret = True
+    try:
+        from elm.pipeline import Pipeline as elm_Pipeline
+        ret = isinstance(estimator, elm_Pipeline)
+    except:
+        ret = False
+    return ret
+
+def _get_est_type(est):
+    if hasattr(est, '_cls_name'):
+        est_type = est._cls_name.lower()
+    else:
+        est_type = type(est).__name__.lower()
+    return est_type
 
 
 def _indexable(x):
@@ -33,7 +52,7 @@ def to_indexable(*args, **kwargs):
     for x in args:
         if x is None or isinstance(x, da.Array):
             yield x
-        elif isinstance(x, Base):
+        elif is_dask_collection(x):
             yield delayed(indexable, pure=True)(x)
         else:
             yield indexable(x)
@@ -51,7 +70,7 @@ def to_keys(dsk, *args):
             dsk.update(x.dask)
             yield x.key
         else:
-            assert not isinstance(x, Base)
+            assert not is_dask_collection(x)
             key = 'array-' + tokenize(x)
             dsk[key] = x
             yield key

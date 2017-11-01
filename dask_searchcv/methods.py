@@ -15,9 +15,12 @@ from dask.base import normalize_token
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
-from sklearn.utils.validation import check_consistent_length, _is_arraylike
+from sklearn.utils.validation import (check_consistent_length as _check_consistent_length,
+                                      _is_arraylike)
 
 from .utils import copy_estimator
+
+
 
 # Copied from scikit-learn/sklearn/utils/fixes.py, can be removed once we drop
 # support for scikit-learn < 0.18.1 or numpy < 1.12.0.
@@ -64,6 +67,17 @@ def warn_fit_failure(error_score, e):
 # ----------------------- #
 
 
+
+def check_consistent_length(*arrays):
+    try:
+        from elm.mldataset import is_mldataset
+    except:
+        is_mldataset = lambda x: False
+    if any(is_mldataset(arr) for arr in arrays):
+        return True # TODO ? consequence?
+    return _check_consistent_length(*arrays)
+
+
 class CVCache(object):
     def __init__(self, splits, pairwise=False, cache=True):
         self.splits = splits
@@ -101,8 +115,11 @@ class CVCache(object):
             return self.cache[n, is_x, is_train]
 
         inds = self.splits[n][0] if is_train else self.splits[n][1]
-        result = safe_indexing(X if is_x else y, inds)
-
+        post_splits = getattr(self, '_post_splits', None)
+        if post_splits:
+            result = post_splits(np.array(X)[inds])
+        else:
+            result = safe_indexing(X if is_x else y, inds)
         if self.cache is not None:
             self.cache[n, is_x, is_train] = result
         return result
@@ -117,16 +134,30 @@ class CVCache(object):
         if X.shape[0] != X.shape[1]:
             raise ValueError("X should be a square kernel matrix")
         train, test = self.splits[n]
+        post_splits = getattr(self, '_post_splits', None)
         result = X[np.ix_(train if is_train else test, train)]
-
+        if post_splits:
+            result = post_splits(result)
         if self.cache is not None:
             self.cache[n, True, is_train] = result
         return result
 
 
-def cv_split(cv, X, y, groups, is_pairwise, cache):
-    check_consistent_length(X, y, groups)
-    return CVCache(list(cv.split(X, y, groups)), is_pairwise, cache)
+def cv_split(cv, X, y, groups, is_pairwise, cache, sampler):
+    kw = dict(pairwise=is_pairwise, cache=cache)
+    if sampler is None:
+        _check_consistent_length(X, y, groups)
+    if cache and not hasattr(cache, 'extract'):
+        cls = CVCache
+    else:
+        cls = cache
+        kw['cache'] = True
+    splits = list(cv.split(X, y, groups))
+    if sampler:
+        args = (sampler, splits,)
+    else:
+        args = (splits,)
+    return cls(*args, **kw)
 
 
 def cv_n_samples(cvs):
@@ -302,6 +333,7 @@ def _store(results, key_name, array, n_splits, n_candidates,
 
 
 def create_cv_results(scores, candidate_params, n_splits, error_score, weights):
+
     if len(scores[0]) == 4:
         fit_times, test_scores, score_times, train_scores = zip(*scores)
     else:
