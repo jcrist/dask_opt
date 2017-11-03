@@ -1,8 +1,10 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 import copy
+from distutils.version import LooseVersion
 
+import dask
 import dask.array as da
-from dask.base import is_dask_collection, tokenize
+from dask.base import tokenize
 from dask.delayed import delayed, Delayed
 
 from sklearn.utils.validation import indexable, _is_arraylike
@@ -24,6 +26,15 @@ def _get_est_type(est):
     else:
         est_type = type(est).__name__.lower()
     return est_type
+
+
+if LooseVersion(dask.__version__) > '0.15.4':
+    from dask.base import is_dask_collection
+else:
+    from dask.base import Base
+
+    def is_dask_collection(x):
+        return isinstance(x, Base)
 
 
 def _indexable(x):
