@@ -1,7 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 import warnings
-from collections import defaultdict
+from collections import defaultdict, Sequence
 from threading import Lock
 from timeit import default_timer
 from distutils.version import LooseVersion
@@ -69,6 +69,7 @@ def warn_fit_failure(error_score, e):
 
 
 def check_consistent_length(*arrays):
+    # TODO - is this function necessary?
     try:
         from elm.mldataset import is_mldataset
     except:
@@ -76,6 +77,9 @@ def check_consistent_length(*arrays):
     if any(is_mldataset(arr) for arr in arrays):
         return True # TODO ? consequence?
     return _check_consistent_length(*arrays)
+
+def _is_xy_tuple(result):
+    return isinstance(result, tuple) and len(result) == 2
 
 
 class CVCache(object):
@@ -118,10 +122,11 @@ class CVCache(object):
         post_splits = getattr(self, '_post_splits', None)
         if post_splits:
             result = post_splits(np.array(X)[inds])
+            self.cache[n, True, is_train] = result
         else:
             result = safe_indexing(X if is_x else y, inds)
-        if self.cache is not None:
-            self.cache[n, is_x, is_train] = result
+            if self.cache is not None:
+                self.cache[n, is_x, is_train] = result
         return result
 
     def _extract_pairwise(self, X, y, n, is_train=True):
@@ -138,20 +143,36 @@ class CVCache(object):
         result = X[np.ix_(train if is_train else test, train)]
         if post_splits:
             result = post_splits(result)
-        if self.cache is not None:
-            self.cache[n, True, is_train] = result
+            if _is_xy_tuple(result):
+                if self.cache is not None:
+                    self.cache[n, True, is_train], self.cache[n, False, is_train] = result
+        else:
+            if self.cache is not None:
+                self.cache[n, True, is_train] = result
         return result
+
+
+class CVCacheSampler(CVCache):
+    def __init__(self, sampler, splits, pairwise=False, cache=True):
+        self.sampler = sampler
+        super(CVCacheSampler, self).__init__(splits, pairwise=pairwise,
+                                              cache=cache)
+
+    def _post_splits(self, X, y=None, n=None, is_x=True, is_train=False):
+        if y is not None:
+            raise ValueError('Expected y to be None (returned by Sampler() instance or similar.')
+        func = getattr(self.sampler, 'fit_transform', getattr(self.sampler, 'transform', self.sampler))
+        return func(X, y=y, is_x=is_x, is_train=is_train)
 
 
 def cv_split(cv, X, y, groups, is_pairwise, cache, sampler):
     kw = dict(pairwise=is_pairwise, cache=cache)
-    if sampler is None:
-        _check_consistent_length(X, y, groups)
-    if cache and not hasattr(cache, 'extract'):
-        cls = CVCache
-    else:
-        cls = cache
+    if sampler:
+        cls = CVCacheSampler
         kw['cache'] = True
+    else:
+        cls = CVCache
+        _check_consistent_length(X, y, groups)
     splits = list(cv.split(X, y, groups))
     if sampler:
         args = (sampler, splits,)
@@ -270,6 +291,8 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
             else:
                 est.fit(X, y, **fit_params)
                 Xt = est.transform(X)
+            if isinstance(Xt, Sequence) and len(Xt) == 2:
+                Xt, y = Xt
         except Exception as e:
             if error_score == 'raise':
                 raise
@@ -277,12 +300,15 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
             est = Xt = FIT_FAILURE
         fit_time = default_timer() - start_time
 
-    return (est, fit_time), Xt
+    return (est, fit_time), (Xt, y)
 
 
 def _score(est, X, y, scorer):
     if est is FIT_FAILURE:
         return FIT_FAILURE
+    if y is None and hasattr(X, '__len__') and len(X) == 2:
+        # TODO is this used?
+        X, y = X
     return scorer(est, X) if y is None else scorer(est, X, y)
 
 
