@@ -257,14 +257,6 @@ def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
         return out
 
 
-def _split_Xy(X, y):
-    siz = getattr(X, '__len__', lambda: None)()
-    new_y = y
-    if siz == 2:
-        X, new_y = X
-    return X, new_y
-
-
 def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                      fit_params, n_splits, error_score):
     if is_pipeline(est) and params is not None:

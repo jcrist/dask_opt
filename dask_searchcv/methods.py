@@ -15,10 +15,9 @@ from dask.base import normalize_token
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
-from sklearn.utils.validation import (check_consistent_length as _check_consistent_length,
-                                      _is_arraylike)
+from sklearn.utils.validation import _is_arraylike, check_consistent_length
 
-from .utils import copy_estimator
+from .utils import copy_estimator, _split_Xy
 
 
 
@@ -66,17 +65,6 @@ def warn_fit_failure(error_score, e):
 # Functions in the graphs #
 # ----------------------- #
 
-
-
-def check_consistent_length(*arrays):
-    # TODO - is this function necessary?
-    try:
-        from elm.mldataset import is_mldataset
-    except:
-        is_mldataset = lambda x: False
-    if any(is_mldataset(arr) for arr in arrays):
-        return True # TODO ? consequence?
-    return _check_consistent_length(*arrays)
 
 def _is_xy_tuple(result):
     return isinstance(result, tuple) and len(result) == 2
@@ -166,18 +154,25 @@ class CVCacheSampler(CVCache):
 
 
 def cv_split(cv, X, y, groups, is_pairwise, cache, sampler):
+    print('cv, groups, is_pairwise, cache, sampler',
+          cv, groups, is_pairwise, cache, sampler)
     kw = dict(pairwise=is_pairwise, cache=cache)
     if sampler:
+        print('if sampler = True')
         cls = CVCacheSampler
         kw['cache'] = True
     else:
+        print('if sampler = Falsy')
         cls = CVCache
-        _check_consistent_length(X, y, groups)
+        check_consistent_length(X, y, groups)
     splits = list(cv.split(X, y, groups))
     if sampler:
+        print('if sampler = True')
         args = (sampler, splits,)
     else:
+        print('if sampler = Falsy')
         args = (splits,)
+    print('ak', args, kw)
     return cls(*args, **kw)
 
 
@@ -291,8 +286,7 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
             else:
                 est.fit(X, y, **fit_params)
                 Xt = est.transform(X)
-            if isinstance(Xt, Sequence) and len(Xt) == 2:
-                Xt, y = Xt
+            Xt, y = _split_Xy(Xt, y)
         except Exception as e:
             if error_score == 'raise':
                 raise
@@ -306,9 +300,7 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
 def _score(est, X, y, scorer):
     if est is FIT_FAILURE:
         return FIT_FAILURE
-    if y is None and hasattr(X, '__len__') and len(X) == 2:
-        # TODO is this used?
-        X, y = X
+    X, y = _split_Xy(X, y)
     return scorer(est, X) if y is None else scorer(est, X, y)
 
 
@@ -359,7 +351,6 @@ def _store(results, key_name, array, n_splits, n_candidates,
 
 
 def create_cv_results(scores, candidate_params, n_splits, error_score, weights):
-
     if len(scores[0]) == 4:
         fit_times, test_scores, score_times, train_scores = zip(*scores)
     else:

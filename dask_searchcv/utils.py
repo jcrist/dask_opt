@@ -97,3 +97,9 @@ def copy_estimator(est):
 
 def unzip(itbl, n):
     return zip(*itbl) if itbl else [()] * n
+
+
+def _split_Xy(X, y):
+    if isinstance(X, (tuple, list)) and len(X) == 2:
+        X, y = X
+    return X, y
