@@ -144,8 +144,10 @@ class CVCacheSampler(CVCache):
 
     def _post_splits(self, X, y=None, n=None, is_x=True, is_train=False):
         if y is not None:
-            raise ValueError('Expected y to be None (returned by Sampler() instance or similar.')
-        func = getattr(self.sampler, 'fit_transform', getattr(self.sampler, 'transform', self.sampler))
+            raise ValueError('y should be None (found {})'.format(type(y)))
+        func = getattr(self.sampler, 'fit_transform', None)
+        if func is None:
+            func = getattr(self.sampler, 'transform', self.sampler)
         return func(X, y=y, is_x=is_x, is_train=is_train)
 
 
