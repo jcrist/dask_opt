@@ -27,7 +27,7 @@ from sklearn.model_selection._split import (_BaseKFold,
                                             LeavePGroupsOut,
                                             PredefinedSplit,
                                             _CVIterableWrapper)
-from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.pipeline import FeatureUnion
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import _num_samples, check_is_fitted
@@ -39,7 +39,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
 from .utils import (to_indexable, to_keys, unzip, is_dask_collection,
-                    is_pipeline,_get_est_type, _split_Xy)
+                    is_pipeline,_get_est_type)
 
 try:
     from cytoolz import get, pluck
@@ -445,10 +445,14 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     instrs.append((est.steps[-1], is_transform))
     fit_steps = []
     for (step_name, step), transform in instrs:
-        fits, temp_Xs, temp_ys = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
-                                              params, Xs, ys, fit_params, n_splits,
-                                              error_score, step_fields_lk, fit_params_lk,
-                                              field_to_index, step_name, True, transform, False)
+        fits, temp_Xs, temp_ys = _do_fit_step(dsk, next_token, step,
+                                              cv, fields, tokens,
+                                              params, Xs, ys, fit_params,
+                                              n_splits,
+                                              error_score, step_fields_lk,
+                                              fit_params_lk,
+                                              field_to_index, step_name,
+                                              True, transform, False)
         if transform:
             Xs = temp_Xs
             ys = temp_ys
@@ -793,15 +797,15 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             raise ValueError('_get_param_iterator() failed to yield any parameter sets')
         sampler = getattr(self, 'sampler', None)
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
-                                          candidate_params,
-                                          X=X, y=y, groups=groups,
-                                          sampler=sampler,
-                                          fit_params=fit_params,
-                                          iid=self.iid,
-                                          refit=self.refit,
-                                          error_score=error_score,
-                                          return_train_score=self.return_train_score,
-                                          cache_cv=self.cache_cv)
+                                  candidate_params,
+                                  X=X, y=y, groups=groups,
+                                  sampler=sampler,
+                                  fit_params=fit_params,
+                                  iid=self.iid,
+                                  refit=self.refit,
+                                  error_score=error_score,
+                                  return_train_score=self.return_train_score,
+                                  cache_cv=self.cache_cv)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
         n_jobs = _normalize_n_jobs(self.n_jobs)

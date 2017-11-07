@@ -10,13 +10,14 @@ from dask.delayed import delayed, Delayed
 from sklearn.utils.validation import indexable, _is_arraylike
 from sklearn.pipeline import Pipeline as sk_Pipeline
 
+
 def is_pipeline(estimator):
     if isinstance(estimator, sk_Pipeline):
         return True
     try:
         from elm.pipeline import Pipeline as elm_Pipeline
         return isinstance(estimator, elm_Pipeline)
-    except:
+    except Exception as e:
         return False
 
 

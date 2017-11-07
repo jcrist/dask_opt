@@ -1,7 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 import warnings
-from collections import defaultdict, Sequence
+from collections import defaultdict
 from threading import Lock
 from timeit import default_timer
 from distutils.version import LooseVersion
@@ -18,7 +18,6 @@ from sklearn.utils import safe_indexing
 from sklearn.utils.validation import _is_arraylike, check_consistent_length
 
 from .utils import copy_estimator, _split_Xy, _is_xy_tuple
-
 
 
 # Copied from scikit-learn/sklearn/utils/fixes.py, can be removed once we drop
@@ -128,7 +127,8 @@ class CVCache(object):
             result = post_splits(result)
             if _is_xy_tuple(result):
                 if self.cache is not None:
-                    self.cache[n, True, is_train], self.cache[n, False, is_train] = result
+                    (self.cache[n, True, is_train],
+                     self.cache[n, False, is_train]) = result
             elif self.cache is not None:
                 self.cache[n, True, is_train] = result
         elif self.cache is not None:
@@ -262,7 +262,6 @@ def fit(est, X, y, error_score='raise', fields=None, params=None,
 
 def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
                   fit_params=None):
-    new_y = None
     if X is FIT_FAILURE:
         est, fit_time, Xt = FIT_FAILURE, 0.0, FIT_FAILURE
     else:
