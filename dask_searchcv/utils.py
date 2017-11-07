@@ -12,13 +12,13 @@ from sklearn.pipeline import Pipeline as sk_Pipeline
 
 def is_pipeline(estimator):
     if isinstance(estimator, sk_Pipeline):
-        ret = True
+        return True
     try:
         from elm.pipeline import Pipeline as elm_Pipeline
-        ret = isinstance(estimator, elm_Pipeline)
+        return isinstance(estimator, elm_Pipeline)
     except:
-        ret = False
-    return ret
+        return False
+
 
 def _get_est_type(est):
     if hasattr(est, '_cls_name'):
@@ -99,7 +99,14 @@ def unzip(itbl, n):
     return zip(*itbl) if itbl else [()] * n
 
 
-def _split_Xy(X, y):
-    if isinstance(X, (tuple, list)) and len(X) == 2:
+def _is_xy_tuple(result, typ=tuple):
+    if typ and not isinstance(typ, tuple):
+        typ = (typ,)
+    typ = typ + (tuple,)
+    return isinstance(result, typ) and len(result) == 2
+
+
+def _split_Xy(X, y, typ=tuple):
+    if _is_xy_tuple(X, typ=typ):
         X, y = X
     return X, y

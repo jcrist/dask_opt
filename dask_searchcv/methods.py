@@ -17,7 +17,7 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
 from sklearn.utils.validation import _is_arraylike, check_consistent_length
 
-from .utils import copy_estimator, _split_Xy
+from .utils import copy_estimator, _split_Xy, _is_xy_tuple
 
 
 
@@ -64,11 +64,6 @@ def warn_fit_failure(error_score, e):
 # ----------------------- #
 # Functions in the graphs #
 # ----------------------- #
-
-
-def _is_xy_tuple(result):
-    return isinstance(result, tuple) and len(result) == 2
-
 
 class CVCache(object):
     def __init__(self, splits, pairwise=False, cache=True):
@@ -134,8 +129,9 @@ class CVCache(object):
             if _is_xy_tuple(result):
                 if self.cache is not None:
                     self.cache[n, True, is_train], self.cache[n, False, is_train] = result
-        else:
-            if self.cache is not None:
+            elif self.cache is not None:
+                self.cache[n, True, is_train] = result
+        elif self.cache is not None:
                 self.cache[n, True, is_train] = result
         return result
 
@@ -154,25 +150,18 @@ class CVCacheSampler(CVCache):
 
 
 def cv_split(cv, X, y, groups, is_pairwise, cache, sampler):
-    print('cv, groups, is_pairwise, cache, sampler',
-          cv, groups, is_pairwise, cache, sampler)
     kw = dict(pairwise=is_pairwise, cache=cache)
     if sampler:
-        print('if sampler = True')
         cls = CVCacheSampler
         kw['cache'] = True
     else:
-        print('if sampler = Falsy')
         cls = CVCache
         check_consistent_length(X, y, groups)
     splits = list(cv.split(X, y, groups))
     if sampler:
-        print('if sampler = True')
         args = (sampler, splits,)
     else:
-        print('if sampler = Falsy')
         args = (splits,)
-    print('ak', args, kw)
     return cls(*args, **kw)
 
 
@@ -273,6 +262,7 @@ def fit(est, X, y, error_score='raise', fields=None, params=None,
 
 def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
                   fit_params=None):
+    new_y = None
     if X is FIT_FAILURE:
         est, fit_time, Xt = FIT_FAILURE, 0.0, FIT_FAILURE
     else:
@@ -286,7 +276,7 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
             else:
                 est.fit(X, y, **fit_params)
                 Xt = est.transform(X)
-            Xt, y = _split_Xy(Xt, y)
+            Xt, y = _split_Xy(Xt, y, typ=(tuple, list))
         except Exception as e:
             if error_score == 'raise':
                 raise

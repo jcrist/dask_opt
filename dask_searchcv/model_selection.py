@@ -39,7 +39,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
 from .utils import (to_indexable, to_keys, unzip, is_dask_collection,
-                    is_pipeline,_get_est_type)
+                    is_pipeline,_get_est_type, _split_Xy)
 
 try:
     from cytoolz import get, pluck
@@ -341,7 +341,7 @@ def _group_ids_by_index(index, tokens):
 def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
                  fit_params, n_splits, error_score, step_fields_lk,
                  fit_params_lk, field_to_index, step_name, none_passthrough,
-                 is_transform):
+                 is_transform, is_featureunion):
     sub_fields, sub_inds = map(list, unzip(step_fields_lk[step_name], 2))
     sub_fit_params = fit_params_lk[step_name]
     if step_name in field_to_index:
@@ -364,8 +364,10 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
                 if is_transform:
                     if none_passthrough:
                         new_Xs.update(zip(ids, get(ids, Xs)))
+                        new_ys.update(zip(ids, get(ids, ys)))
                     else:
                         new_Xs.update(nones)
+                        new_ys.update(nones)
             else:
                 # Extract the proper subset of Xs, ys
                 sub_Xs = get(ids, Xs)
@@ -378,26 +380,30 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
                     sub_tokens = sub_params = None
 
                 if is_transform:
-                    sub_fits, sub_Xs, sub_ys = do_fit_transform(dsk, next_token,
-                                                        sub_est, cv, sub_fields,
-                                                        sub_tokens, sub_params,
-                                                        sub_Xs, sub_ys,
-                                                        sub_fit_params,
-                                                        n_splits, error_score)
-                    new_ys.update(zip(ids, sub_ys))
+                    out = do_fit_transform(dsk, next_token,
+                                           sub_est, cv, sub_fields,
+                                           sub_tokens, sub_params,
+                                           sub_Xs, sub_ys,
+                                           sub_fit_params,
+                                           n_splits, error_score)
+                    if len(out) == 3:
+                        sub_fits, sub_Xs, sub_ys = out
+                        new_ys.update(zip(ids, sub_ys))
+                    else:
+                        sub_fits, sub_Xs = out
                     new_Xs.update(zip(ids, sub_Xs))
-                    new_fits.update(zip(ids, sub_fits))
                 else:
                     sub_fits = do_fit(dsk, next_token, sub_est, cv,
                                         sub_fields, sub_tokens, sub_params,
                                         sub_Xs, sub_ys, sub_fit_params,
                                         n_splits, error_score)
-                    new_fits.update(zip(ids, sub_fits))
+                new_fits.update(zip(ids, sub_fits))
         # Extract lists of transformed Xs and fit steps
         all_ids = list(range(len(Xs)))
         if is_transform:
             Xs = get(all_ids, new_Xs)
-            ys = get(all_ids, new_ys)
+            if not is_featureunion:
+                ys = get(all_ids, new_ys)
         fits = get(all_ids, new_fits)
     elif step is None:
         # Nothing to do
@@ -413,10 +419,14 @@ def _do_fit_step(dsk, next_token, step, cv, fields, tokens, params, Xs, ys,
             sub_tokens = sub_params = None
 
         if is_transform:
-            fits, Xs, ys = do_fit_transform(dsk, next_token, step, cv,
-                                        sub_fields, sub_tokens, sub_params,
-                                        Xs, ys, sub_fit_params, n_splits,
-                                        error_score)
+            out = do_fit_transform(dsk, next_token, step, cv,
+                                   sub_fields, sub_tokens, sub_params,
+                                   Xs, ys, sub_fit_params, n_splits,
+                                   error_score)
+            if len(out) == 3:
+                fits, Xs, ys = out
+            else:
+                fits, Xs = out
         else:
             fits = do_fit(dsk, next_token, step, cv, sub_fields,
                             sub_tokens, sub_params, Xs, ys, sub_fit_params,
@@ -435,10 +445,13 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     instrs.append((est.steps[-1], is_transform))
     fit_steps = []
     for (step_name, step), transform in instrs:
-        fits, Xs, ys = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
-                                    params, Xs, ys, fit_params, n_splits,
-                                    error_score, step_fields_lk, fit_params_lk,
-                                    field_to_index, step_name, True, transform)
+        fits, temp_Xs, temp_ys = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
+                                              params, Xs, ys, fit_params, n_splits,
+                                              error_score, step_fields_lk, fit_params_lk,
+                                              field_to_index, step_name, True, transform, False)
+        if transform:
+            Xs = temp_Xs
+            ys = temp_ys
         fit_steps.append(fits)
     # Rebuild the pipelines
     step_names = [n for n, _ in est.steps]
@@ -460,7 +473,7 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             m += 1
 
     if is_transform:
-        return out_ests, Xs
+        return out_ests, Xs, ys
     return out_ests
 
 
@@ -501,9 +514,9 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     tr_Xs = []
     for (step_name, step) in est.transformer_list:
         fits, out_Xs, _ = _do_fit_step(dsk, next_token, step, cv, fields, tokens,
-                                            params, Xs, ys, fit_params, n_splits,
-                                            error_score, step_fields_lk, fit_params_lk,
-                                            field_to_index, step_name, False, True)
+                                    params, Xs, ys, fit_params, n_splits,
+                                    error_score, step_fields_lk, fit_params_lk,
+                                    field_to_index, step_name, False, True, True)
         fit_steps.append(fits)
         tr_Xs.append(out_Xs)
 
@@ -535,7 +548,8 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     tr_name = 'feature-union-concat-' + token
     m = 0
     seen = {}
-    for steps, Xs, wt, (w, wl), nsamp in zip(zip(*fit_steps), zip(*tr_Xs),
+    for steps, Xs, wt, (w, wl), nsamp in zip(zip(*fit_steps),
+                                             zip(*tr_Xs),
                                              weight_tokens, weights, n_samples):
         if (steps, wt) in seen:
             out_append(seen[steps, wt])
@@ -550,7 +564,7 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             seen[steps, wt] = m
             out_append(m)
             m += 1
-    return [(fit_name, i) for i in out], [(tr_name, i) for i in out]
+    return ([(fit_name, i) for i in out], [(tr_name, i) for i in out],)
 
 
 # ------------ #
