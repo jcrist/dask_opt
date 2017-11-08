@@ -64,15 +64,15 @@ class TokenIterator(object):
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, fit_params=None, iid=True, refit=True,
-                error_score='raise', return_train_score=True,
-                cache_cv=True):
-    dsk = {}
+                error_score='raise', return_train_score=True, cache_cv=True):
     # "pairwise" estimators require a different graph for CV splitting
     X, y, groups = to_indexable(X, y, groups)
     cv = check_cv(cv, y, is_classifier(estimator))
     is_pairwise = getattr(estimator, '_pairwise', False)
+    dsk = {}
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
     n_splits = compute_n_splits(cv, X, y, groups)
+
     if fit_params:
         # A mapping of {name: (name, graph-key)}
         param_values = to_indexable(*fit_params.values(), allow_scalars=True)
@@ -80,13 +80,13 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                       zip(fit_params, to_keys(dsk, *param_values))}
     else:
         fit_params = {}
+
     fields, tokens, params = normalize_params(candidate_params)
     main_token = tokenize(normalize_estimator(estimator), fields, params,
                           X_name, y_name, groups_name, fit_params, cv,
                           error_score == 'raise', return_train_score)
 
     cv_name = 'cv-split-' + main_token
-
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
                     is_pairwise, cache_cv)
 
@@ -438,8 +438,10 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                  fit_params, n_splits, error_score, is_transform):
     if 'steps' in fields:
         raise NotImplementedError("Setting Pipeline.steps in a gridsearch")
+
     field_to_index, step_fields_lk = _group_subparams(est.steps, fields)
     fit_params_lk = _group_fit_params(est.steps, fit_params)
+
     # A list of (step, is_transform)
     instrs = [(s, True) for s in est.steps[:-1]]
     instrs.append((est.steps[-1], is_transform))
@@ -457,6 +459,7 @@ def _do_pipeline(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             Xs = temp_Xs
             ys = temp_ys
         fit_steps.append(fits)
+
     # Rebuild the pipelines
     step_names = [n for n, _ in est.steps]
     out_ests = []
@@ -552,8 +555,7 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     tr_name = 'feature-union-concat-' + token
     m = 0
     seen = {}
-    for steps, Xs, wt, (w, wl), nsamp in zip(zip(*fit_steps),
-                                             zip(*tr_Xs),
+    for steps, Xs, wt, (w, wl), nsamp in zip(zip(*fit_steps), zip(*tr_Xs),
                                              weight_tokens, weights, n_samples):
         if (steps, wt) in seen:
             out_append(seen[steps, wt])
@@ -568,7 +570,7 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             seen[steps, wt] = m
             out_append(m)
             m += 1
-    return ([(fit_name, i) for i in out], [(tr_name, i) for i in out],)
+    return [(fit_name, i) for i in out], [(tr_name, i) for i in out]
 
 
 # ------------ #
@@ -792,11 +794,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                 error_score == 'raise'):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
-        candidate_params = list(self._get_param_iterator())
-        if not candidate_params:
-            raise ValueError('_get_param_iterator() failed to yield any parameter sets')
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
-                                  candidate_params,
+                                   list(self._get_param_iterator()),
                                   X=X, y=y, groups=groups,
                                   fit_params=fit_params,
                                   iid=self.iid,
