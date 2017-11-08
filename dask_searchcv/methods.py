@@ -19,7 +19,6 @@ from sklearn.utils.validation import check_consistent_length, _is_arraylike
 
 from .utils import copy_estimator, _split_Xy, _is_xy_tuple
 
-
 # Copied from scikit-learn/sklearn/utils/fixes.py, can be removed once we drop
 # support for scikit-learn < 0.18.1 or numpy < 1.12.0.
 if LooseVersion(np.__version__) < '1.12.0':
@@ -64,6 +63,7 @@ def warn_fit_failure(error_score, e):
 # Functions in the graphs #
 # ----------------------- #
 
+
 class CVCache(object):
     def __init__(self, splits, pairwise=False, cache=True):
         self.splits = splits
@@ -101,14 +101,9 @@ class CVCache(object):
             return self.cache[n, is_x, is_train]
 
         inds = self.splits[n][0] if is_train else self.splits[n][1]
-        post_splits = getattr(self, '_post_splits', None)
-        if post_splits:
-            if self.cache in (None, False):
-                raise ValueError('Must set cache_cv=True with _post_splits')
-            result = post_splits(np.array(X)[inds])
-            self.cache[n, True, is_train] = result
-        else:
-            result = safe_indexing(X if is_x else y, inds)
+        result = safe_indexing(X if is_x else y, inds)
+
+        if self.cache is not None:
             self.cache[n, is_x, is_train] = result
         return result
 
@@ -122,20 +117,11 @@ class CVCache(object):
         if X.shape[0] != X.shape[1]:
             raise ValueError("X should be a square kernel matrix")
         train, test = self.splits[n]
-        post_splits = getattr(self, '_post_splits', None)
         result = X[np.ix_(train if is_train else test, train)]
-        if post_splits:
-            result = post_splits(result)
-            if _is_xy_tuple(result):
-                if self.cache is not None:
-                    (self.cache[n, True, is_train],
-                     self.cache[n, False, is_train]) = result
-            elif self.cache is not None:
-                self.cache[n, True, is_train] = result
-        elif self.cache is not None:
-                self.cache[n, True, is_train] = result
-        return result
 
+        if self.cache is not None:
+            self.cache[n, True, is_train] = result
+        return result
 
 def cv_split(cv, X, y, groups, is_pairwise, cache):
     kw = dict(pairwise=is_pairwise, cache=cache)
