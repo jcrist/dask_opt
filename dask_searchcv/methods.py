@@ -15,7 +15,7 @@ from dask.base import normalize_token
 from sklearn.exceptions import FitFailedWarning
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
-from sklearn.utils.validation import _is_arraylike, check_consistent_length
+from sklearn.utils.validation import check_consistent_length, _is_arraylike
 
 from .utils import copy_estimator, _split_Xy, _is_xy_tuple
 
@@ -103,12 +103,13 @@ class CVCache(object):
         inds = self.splits[n][0] if is_train else self.splits[n][1]
         post_splits = getattr(self, '_post_splits', None)
         if post_splits:
+            if self.cache in (None, False):
+                raise ValueError('Must set cache_cv=True with _post_splits')
             result = post_splits(np.array(X)[inds])
             self.cache[n, True, is_train] = result
         else:
             result = safe_indexing(X if is_x else y, inds)
-            if self.cache is not None:
-                self.cache[n, is_x, is_train] = result
+            self.cache[n, is_x, is_train] = result
         return result
 
     def _extract_pairwise(self, X, y, n, is_train=True):
@@ -136,35 +137,20 @@ class CVCache(object):
         return result
 
 
-class CVCacheSampler(CVCache):
-    def __init__(self, sampler, splits, pairwise=False, cache=True):
-        self.sampler = sampler
-        super(CVCacheSampler, self).__init__(splits, pairwise=pairwise,
-                                              cache=cache)
-
-    def _post_splits(self, X, y=None, n=None, is_x=True, is_train=False):
-        if y is not None:
-            raise ValueError('y should be None (found {})'.format(type(y)))
-        func = getattr(self.sampler, 'fit_transform', None)
-        if func is None:
-            func = getattr(self.sampler, 'transform', self.sampler)
-        return func(X, y=y, is_x=is_x, is_train=is_train)
-
-
-def cv_split(cv, X, y, groups, is_pairwise, cache, sampler):
+def cv_split(cv, X, y, groups, is_pairwise, cache):
     kw = dict(pairwise=is_pairwise, cache=cache)
-    if sampler:
-        cls = CVCacheSampler
-        kw['cache'] = True
-    else:
-        cls = CVCache
-        check_consistent_length(X, y, groups)
     splits = list(cv.split(X, y, groups))
-    if sampler:
-        args = (sampler, splits,)
-    else:
-        args = (splits,)
-    return cls(*args, **kw)
+    if not cache or isinstance(cache, bool):
+        check_consistent_length(X, y, groups)
+        return CVCache(list(cv.split(X, y, groups)), is_pairwise, cache)
+    replace = dict(pairwise=is_pairwise,
+                  cache={},
+                  splits=splits)
+    params = tuple(cache.get_params())
+    for key, val in replace.items():
+        print(key, val)
+        cache.set_params(**{key:val})
+    return cache
 
 
 def cv_n_samples(cvs):

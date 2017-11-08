@@ -63,7 +63,7 @@ class TokenIterator(object):
 
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
-                groups=None, sampler=None, fit_params=None, iid=True, refit=True,
+                groups=None, fit_params=None, iid=True, refit=True,
                 error_score='raise', return_train_score=True,
                 cache_cv=True):
     dsk = {}
@@ -88,7 +88,7 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     cv_name = 'cv-split-' + main_token
 
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
-                    is_pairwise, cache_cv, sampler)
+                    is_pairwise, cache_cv)
 
     if iid:
         weights = 'cv-n-samples-' + main_token
@@ -795,11 +795,9 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         candidate_params = list(self._get_param_iterator())
         if not candidate_params:
             raise ValueError('_get_param_iterator() failed to yield any parameter sets')
-        sampler = getattr(self, 'sampler', None)
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
                                   candidate_params,
                                   X=X, y=y, groups=groups,
-                                  sampler=sampler,
                                   fit_params=fit_params,
                                   iid=self.iid,
                                   refit=self.refit,
