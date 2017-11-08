@@ -1,3 +1,4 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
 import copy
 from distutils.version import LooseVersion
 
@@ -78,3 +79,16 @@ def copy_estimator(est):
 
 def unzip(itbl, n):
     return zip(*itbl) if itbl else [()] * n
+
+
+def _is_xy_tuple(result, typ=tuple):
+    if typ and not isinstance(typ, tuple):
+        typ = (typ,)
+    typ = typ + (tuple,)
+    return isinstance(result, typ) and len(result) == 2
+
+
+def _split_Xy(X, y, typ=tuple):
+    if _is_xy_tuple(X, typ=typ):
+        X, y = X
+    return X, y

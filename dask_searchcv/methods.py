@@ -17,7 +17,7 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
 from sklearn.utils.validation import check_consistent_length, _is_arraylike
 
-from .utils import copy_estimator
+from .utils import copy_estimator, _split_Xy
 
 # Copied from scikit-learn/sklearn/utils/fixes.py, can be removed once we drop
 # support for scikit-learn < 0.18.1 or numpy < 1.12.0.
@@ -125,8 +125,15 @@ class CVCache(object):
 
 
 def cv_split(cv, X, y, groups, is_pairwise, cache):
-    check_consistent_length(X, y, groups)
-    return CVCache(list(cv.split(X, y, groups)), is_pairwise, cache)
+    splits = list(cv.split(X, y, groups))
+    if not cache or isinstance(cache, bool):
+        check_consistent_length(X, y, groups)
+        return CVCache(list(cv.split(X, y, groups)), is_pairwise, cache)
+    params = dict(pairwise=is_pairwise,
+                  cache={},
+                  splits=splits)
+    cache.set_params(**params)
+    return cache
 
 
 def cv_n_samples(cvs):
@@ -239,6 +246,7 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
             else:
                 est.fit(X, y, **fit_params)
                 Xt = est.transform(X)
+            Xt, y = _split_Xy(Xt, y, typ=(tuple, list))
         except Exception as e:
             if error_score == 'raise':
                 raise
@@ -246,12 +254,13 @@ def fit_transform(est, X, y, error_score='raise', fields=None, params=None,
             est = Xt = FIT_FAILURE
         fit_time = default_timer() - start_time
 
-    return (est, fit_time), Xt
+    return (est, fit_time), (Xt, y)
 
 
 def _score(est, X, y, scorer):
     if est is FIT_FAILURE:
         return FIT_FAILURE
+    X, y = _split_Xy(X, y)
     return scorer(est, X) if y is None else scorer(est, X, y)
 
 
