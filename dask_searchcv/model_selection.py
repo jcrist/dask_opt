@@ -27,7 +27,7 @@ from sklearn.model_selection._split import (_BaseKFold,
                                             LeavePGroupsOut,
                                             PredefinedSplit,
                                             _CVIterableWrapper)
-from sklearn.pipeline import FeatureUnion, Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import _num_samples, check_is_fitted
@@ -38,8 +38,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       cv_n_samples, cv_extract, cv_extract_params,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
-from .utils import (to_indexable, to_keys, unzip, is_dask_collection,
-                    _get_est_type)
+from .utils import to_indexable, to_keys, unzip, is_dask_collection
 
 try:
     from cytoolz import get, pluck
@@ -164,7 +163,7 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
         # Fitting and scoring can all be done as a single task
         n_and_fit_params = _get_fit_params(cv, fit_params, n_splits)
 
-        est_type = _get_est_type(est)
+        est_type = type(est).__name__.lower()
         est_name = '%s-%s' % (est_type, main_token)
         score_name = '%s-fit-score-%s' % (est_type, main_token)
         dsk[est_name] = est
@@ -232,7 +231,7 @@ def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             fields = None
 
         token = next_token(est)
-        est_type = _get_est_type(est)
+        est_type = type(est).__name__.lower()
         est_name = '%s-%s' % (est_type, token)
         fit_name = '%s-fit-%s' % (est_type, token)
         dsk[est_name] = est
@@ -273,13 +272,13 @@ def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
             params = tokens = repeat(None)
             fields = None
 
-        name = _get_est_type(est)
+        name = type(est).__name__.lower()
         token = next_token(est)
         fit_Xt_name = '%s-fit-transform-%s' % (name, token)
         fit_name = '%s-fit-%s' % (name, token)
         Xt_name = '%s-transform-X-%s' % (name, token)
         yt_name = '%s-transform-y-%s' % (name, token)
-        est_name = '%s-%s' % (_get_est_type(est), token)
+        est_name = '%s-%s' % (type(est).__name__.lower(), token)
         dsk[est_name] = est
 
         seen = {}

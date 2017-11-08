@@ -11,14 +11,6 @@ from sklearn.utils.validation import indexable, _is_arraylike
 from sklearn.pipeline import Pipeline
 
 
-def _get_est_type(est):
-    if hasattr(est, '_cls_name'):
-        est_type = est._cls_name.lower()
-    else:
-        est_type = type(est).__name__.lower()
-    return est_type
-
-
 if LooseVersion(dask.__version__) > '0.15.4':
     from dask.base import is_dask_collection
 else:
