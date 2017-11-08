@@ -27,7 +27,7 @@ from sklearn.model_selection._split import (_BaseKFold,
                                             LeavePGroupsOut,
                                             PredefinedSplit,
                                             _CVIterableWrapper)
-from sklearn.pipeline import FeatureUnion
+from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.utils.metaestimators import if_delegate_has_method
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import _num_samples, check_is_fitted
@@ -39,7 +39,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
 from .utils import (to_indexable, to_keys, unzip, is_dask_collection,
-                    is_pipeline, _get_est_type)
+                    _get_est_type)
 
 try:
     from cytoolz import get, pluck
@@ -160,7 +160,7 @@ def _group_fit_params(steps, fit_params):
 def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
                      X, y, fit_params, n_splits, error_score, scorer,
                      return_train_score):
-    if not is_pipeline(est):
+    if not isinstance(est, Pipeline):
         # Fitting and scoring can all be done as a single task
         n_and_fit_params = _get_fit_params(cv, fit_params, n_splits)
 
@@ -221,7 +221,7 @@ def do_fit_and_score(dsk, main_token, est, cv, fields, tokens, params,
 
 def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
            fit_params, n_splits, error_score):
-    if is_pipeline(est) and params is not None:
+    if isinstance(est, Pipeline) and params is not None:
         return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
                             Xs, ys, fit_params, n_splits, error_score, False)
     else:
@@ -259,7 +259,7 @@ def do_fit(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
 
 def do_fit_transform(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
                      fit_params, n_splits, error_score):
-    if is_pipeline(est) and params is not None:
+    if isinstance(est, Pipeline) and params is not None:
         return _do_pipeline(dsk, next_token, est, cv, fields, tokens, params,
                             Xs, ys, fit_params, n_splits, error_score, True)
     elif isinstance(est, FeatureUnion) and params is not None:

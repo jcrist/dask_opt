@@ -134,7 +134,6 @@ def cv_split(cv, X, y, groups, is_pairwise, cache):
                   splits=splits)
     params = tuple(cache.get_params())
     for key, val in replace.items():
-        print(key, val)
         cache.set_params(**{key:val})
     return cache
 
