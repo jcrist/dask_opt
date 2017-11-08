@@ -64,9 +64,10 @@ class TokenIterator(object):
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, fit_params=None, iid=True, refit=True,
                 error_score='raise', return_train_score=True, cache_cv=True):
-    # "pairwise" estimators require a different graph for CV splitting
+
     X, y, groups = to_indexable(X, y, groups)
     cv = check_cv(cv, y, is_classifier(estimator))
+    # "pairwise" estimators require a different graph for CV splitting
     is_pairwise = getattr(estimator, '_pairwise', False)
     dsk = {}
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)

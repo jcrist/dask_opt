@@ -8,7 +8,6 @@ from dask.base import tokenize
 from dask.delayed import delayed, Delayed
 
 from sklearn.utils.validation import indexable, _is_arraylike
-from sklearn.pipeline import Pipeline
 
 
 if LooseVersion(dask.__version__) > '0.15.4':
