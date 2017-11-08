@@ -17,7 +17,7 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.utils import safe_indexing
 from sklearn.utils.validation import check_consistent_length, _is_arraylike
 
-from .utils import copy_estimator, _split_Xy, _is_xy_tuple
+from .utils import copy_estimator, _split_Xy
 
 # Copied from scikit-learn/sklearn/utils/fixes.py, can be removed once we drop
 # support for scikit-learn < 0.18.1 or numpy < 1.12.0.
@@ -123,18 +123,16 @@ class CVCache(object):
             self.cache[n, True, is_train] = result
         return result
 
+
 def cv_split(cv, X, y, groups, is_pairwise, cache):
-    kw = dict(pairwise=is_pairwise, cache=cache)
     splits = list(cv.split(X, y, groups))
     if not cache or isinstance(cache, bool):
         check_consistent_length(X, y, groups)
         return CVCache(list(cv.split(X, y, groups)), is_pairwise, cache)
-    replace = dict(pairwise=is_pairwise,
+    params = dict(pairwise=is_pairwise,
                   cache={},
                   splits=splits)
-    params = tuple(cache.get_params())
-    for key, val in replace.items():
-        cache.set_params(**{key:val})
+    cache.set_params(**params)
     return cache
 
 
