@@ -898,15 +898,20 @@ estimator : estimator object.
 
 {parameters}
 
-scoring : string, callable, dict of those, or None, default=None
-    A string (see model evaluation documentation) or
-    a scorer callable object / function with signature
-    ``scorer(estimator, X, y)``.
+scoring : string, callable, list/tuple, dict or None, default: None
+    A single string (see :ref:`scoring_parameter`) or a callable
+    (see :ref:`scoring`) to evaluate the predictions on the test set.
 
-    If ``None``, the ``score`` method of the estimator is used.
+    For evaluating multiple metrics, either give a list of (unique) strings
+    or a dict with names as keys and callables as values.
 
-    A dictionary of ``{{scorer_name: string or callable}}`` may be
-    used to evaluate with multiple metrics.
+    NOTE that when using custom scorers, each scorer should return a single
+    value. Metric functions returning a list/array of values can be wrapped
+    into multiple scorers that return one value each.
+
+    See :ref:`multimetric_grid_search` for an example.
+
+    If None, the estimator's default scorer (if available) is used.
 
 iid : boolean, default=True
     If True, the data is assumed to be identically distributed across
@@ -925,13 +930,25 @@ cv : int, cross-validation generator or an iterable, optional
     either binary or multiclass, ``StratifiedKFold`` is used. In all
     other cases, ``KFold`` is used.
 
-refit : boolean or str, default=True
-    Refit the best estimator with the entire dataset.
-    If "False", it is impossible to make predictions using
-    this {name} instance after fitting.
+refit : boolean, or string, default=True
+    Refit an estimator using the best found parameters on the whole
+    dataset.
 
-    When using multiple metrics, this can be the name of the scorer to
-    use for selecting the best estimator.
+    For multiple metric evaluation, this needs to be a string denoting the
+    scorer is used to find the best parameters for refitting the estimator
+    at the end.
+
+    The refitted estimator is made available at the ``best_estimator_``
+    attribute and permits using ``predict`` directly on this
+    ``GridSearchCV`` instance.
+
+    Also for multiple metric evaluation, the attributes ``best_index_``,
+    ``best_score_`` and ``best_parameters_`` will only be available if
+    ``refit`` is set and all of them will be determined w.r.t this specific
+    scorer.
+
+    See ``scoring`` parameter to know more about multiple metric
+    evaluation.
 
 error_score : 'raise' (default) or numeric
     Value to assign to the score if an error occurs in estimator fitting.
