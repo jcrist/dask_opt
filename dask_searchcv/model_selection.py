@@ -985,6 +985,10 @@ return_train_score : boolean, default=True
     If ``'False'``, the ``cv_results_`` attribute will not include training
     scores.
 
+    Note that for scikit-learn >= 0.19.1, the default of ``True`` is
+    deprecated, and a warning will be raised when accessing train score results
+    without explicitly asking for train scores.
+
 scheduler : string, callable, Client, or None, default=None
     The dask scheduler to use. Default is to use the global scheduler if set,
     and fallback to the threaded scheduler otherwise. To use a different
