@@ -806,13 +806,13 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                         # This will work for both dict / list (tuple)
                         self.refit not in scorer):
                     raise ValueError("For multi-metric scoring, the parameter "
-                                    "refit must be set to a scorer key "
-                                    "to refit an estimator with the best "
-                                    "parameter setting on the whole data and "
-                                    "make the best_* attributes "
-                                    "available for that metric. If this is not "
-                                    "needed, refit should be set to False "
-                                    "explicitly. %r was passed." % self.refit)
+                                     "refit must be set to a scorer key "
+                                     "to refit an estimator with the best "
+                                     "parameter setting on the whole data and "
+                                     "make the best_* attributes "
+                                     "available for that metric. If this is not "
+                                     "needed, refit should be set to False "
+                                     "explicitly. %r was passed." % self.refit)
         else:
             scorer = check_scoring(estimator, scoring=self.scoring)
             multimetric = False
@@ -899,8 +899,8 @@ estimator : estimator object.
 {parameters}
 
 scoring : string, callable, list/tuple, dict or None, default: None
-    A single string (see :ref:`scoring_parameter`) or a callable
-    (see :ref:`scoring`) to evaluate the predictions on the test set.
+    A single string or a callable to evaluate the predictions on the test
+    set.
 
     For evaluating multiple metrics, either give a list of (unique) strings
     or a dict with names as keys and callables as values.
@@ -908,8 +908,6 @@ scoring : string, callable, list/tuple, dict or None, default: None
     NOTE that when using custom scorers, each scorer should return a single
     value. Metric functions returning a list/array of values can be wrapped
     into multiple scorers that return one value each.
-
-    See :ref:`multimetric_grid_search` for an example.
 
     If None, the estimator's default scorer (if available) is used.
 

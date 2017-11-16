@@ -348,10 +348,10 @@ def create_cv_results(scores, candidate_params, n_splits, error_score, weights,
         for key in multimetric:
             _store(results, 'test_{}'.format(key), test_scores[key], n_splits,
                    n_candidates, splits=True, rank=True, weights=weights)
-        for key in multimetric:
-            if train_scores is not None:
+        if train_scores is not None:
+            for key in multimetric:
                 _store(results, 'train_{}'.format(key), train_scores[key], n_splits,
-                    n_candidates, splits=True)
+                       n_candidates, splits=True)
 
     # Use one MaskedArray and mask all the places where the param is not
     # applicable for that candidate. Use defaultdict as each candidate may
