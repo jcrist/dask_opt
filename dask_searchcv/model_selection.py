@@ -39,7 +39,7 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
 from .utils import to_indexable, to_keys, unzip, is_dask_collection
-from ._compat import _HAS_MULTIPLE_METRICS
+from ._compat import _HAS_MULTIPLE_METRICS, _SK_VERSION
 
 try:
     from cytoolz import get, pluck
@@ -48,6 +48,28 @@ except ImportError:  # pragma: no cover
 
 
 __all__ = ['GridSearchCV', 'RandomizedSearchCV']
+
+
+if _SK_VERSION >= '0.19.1':
+    from sklearn.utils.deprecation import DeprecationDict
+    _RETURN_TRAIN_SCORE_DEFAULT = 'warn'
+
+    def handle_deprecated_train_score(results, return_train_score):
+        if return_train_score == 'warn':
+            results = DeprecationDict(results)
+            message = ('You are accessing a training score ({!r}), '
+                       'which will not be available by default any more in '
+                       'sklearn 0.21. If you need training scores, please '
+                       'set return_train_score=True')
+            for key in results:
+                if key.endswith('_train_score'):
+                    results.add_warning(key, message.format(key), FutureWarning)
+        return results
+else:
+    _RETURN_TRAIN_SCORE_DEFAULT = True
+
+    def handle_deprecated_train_score(results, return_train_score):
+        return results
 
 
 class TokenIterator(object):
@@ -64,7 +86,8 @@ class TokenIterator(object):
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, fit_params=None, iid=True, refit=True,
-                error_score='raise', return_train_score=True, cache_cv=True,
+                error_score='raise',
+                return_train_score=_RETURN_TRAIN_SCORE_DEFAULT, cache_cv=True,
                 multimetric=False):
 
     X, y, groups = to_indexable(X, y, groups)
@@ -678,7 +701,8 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
     """Base class for hyper parameter search with cross-validation."""
 
     def __init__(self, estimator, scoring=None, iid=True, refit=True, cv=None,
-                 error_score='raise', return_train_score=True, scheduler=None,
+                 error_score='raise',
+                 return_train_score=_RETURN_TRAIN_SCORE_DEFAULT, scheduler=None,
                  n_jobs=-1, cache_cv=True):
         self.scoring = scoring
         self.estimator = estimator
@@ -842,7 +866,9 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
         out = scheduler(dsk, keys, num_workers=n_jobs)
 
-        self.cv_results_ = results = out[0]
+        results = handle_deprecated_train_score(out[0], self.return_train_score)
+        self.cv_results_ = results
+
         if self.refit:
             if _HAS_MULTIPLE_METRICS and self.multimetric_:
                 key = self.refit
@@ -852,6 +878,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                 results["rank_test_{}".format(key)] == 1)[0]
 
             self.best_estimator_ = out[1]
+
         return self
 
     def visualize(self, filename='mydask', format=None, **kwargs):
@@ -1129,8 +1156,8 @@ class GridSearchCV(DaskBaseSearchCV):
 
     def __init__(self, estimator, param_grid, scoring=None, iid=True,
                  refit=True, cv=None, error_score='raise',
-                 return_train_score=True, scheduler=None, n_jobs=-1,
-                 cache_cv=True):
+                 return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
+                 scheduler=None, n_jobs=-1, cache_cv=True):
         super(GridSearchCV, self).__init__(estimator=estimator,
                                            scoring=scoring,
                                            iid=iid,
@@ -1218,7 +1245,8 @@ class RandomizedSearchCV(DaskBaseSearchCV):
 
     def __init__(self, estimator, param_distributions, n_iter=10,
                  random_state=None, scoring=None, iid=True, refit=True,
-                 cv=None, error_score='raise', return_train_score=True,
+                 cv=None, error_score='raise',
+                 return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
                  scheduler=None, n_jobs=-1, cache_cv=True):
 
         super(RandomizedSearchCV, self).__init__(estimator=estimator,
