@@ -656,6 +656,7 @@ def test_scheduler_param_bad():
 
 class CacheCVLike(CVCache):
     called = 0
+
     def __init__(self, splits=None, pairwise=False, cache=True):
         CVCache.__init__(self, splits=splits, pairwise=pairwise, cache=cache)
 
@@ -710,7 +711,6 @@ def cv_split_bad(cv, X, y, groups, is_pairwise, cache):
     (cv_split_bad, 'sample_xy', False),
 ])
 def test_cv_cache_instance_to_search(cv_split, refit, should_pass):
-    called = 0
     n_splits = 3
     cv = KFold(n_splits)
     pg = {'foo_param': list(range(2, 100))}
@@ -726,7 +726,6 @@ def test_cv_cache_instance_to_search(cv_split, refit, should_pass):
             estimator = MockClassifier()
             refit = Xy
 
-
     class GridSearchCVSampler(dcv.GridSearchCV):
 
         @classmethod
@@ -735,9 +734,9 @@ def test_cv_cache_instance_to_search(cv_split, refit, should_pass):
 
     def fit_pred():
         gs = GridSearchCVSampler(estimator,
-                             pg,
-                             cv=cv,
-                             refit=refit)
+                                 pg,
+                                 cv=cv,
+                                 refit=refit)
 
         gs.fit(example_arguments)
         X, _ = make_classification(n_samples=100,
@@ -798,4 +797,3 @@ def test_cv_multiplemetrics_no_refit():
     assert hasattr(a, 'best_index_') is hasattr(b, 'best_index_')
     assert hasattr(a, 'best_estimator_') is hasattr(b, 'best_estimator_')
     assert hasattr(a, 'best_score_') is hasattr(b, 'best_score_')
-
