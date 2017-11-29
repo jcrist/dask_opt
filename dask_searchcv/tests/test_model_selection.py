@@ -721,16 +721,17 @@ def test_cv_cache_instance_to_search(cv_split, refit, should_pass):
                                  random_state=0)
         if refit == 'sample_x':
             estimator = MockUnsupervised()
-            refit = Xy[0]
+            Xy = Xy[0]
         else:
             estimator = MockClassifier()
-            refit = Xy
+        refit = True
+    else:
+        estimator = MockClassifier()
 
     class GridSearchCVSampler(dcv.GridSearchCV):
 
-        @classmethod
-        def _get_cv_split(self, *a, **kw):
-            return cv_split
+        def _get_cv_split_refit_Xy(self, *a, **kw):
+            return cv_split, Xy
 
     def fit_pred():
         gs = GridSearchCVSampler(estimator,

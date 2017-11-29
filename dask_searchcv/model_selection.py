@@ -38,8 +38,8 @@ from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
                       cv_n_samples, cv_extract, cv_extract_params,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
-from .utils import to_indexable, to_keys, unzip, is_dask_collection
-from sklearn.utils.validation import _is_arraylike
+from .utils import (to_indexable, to_keys,
+                    unzip, is_dask_collection,)
 from ._compat import _HAS_MULTIPLE_METRICS, _SK_VERSION
 
 try:
@@ -87,6 +87,7 @@ class TokenIterator(object):
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, fit_params=None, iid=True, refit=True,
+                refit_Xy=None,
                 return_train_score=_RETURN_TRAIN_SCORE_DEFAULT, cache_cv=True,
                 error_score='raise',
                 cv_split=None,
@@ -100,12 +101,10 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     dsk = {}
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
     n_splits = compute_n_splits(cv, X, y, groups)
-    if cv_split or _is_arraylike(refit):
-        if not _is_arraylike(refit) and refit:
-            raise ValueError('Expected refit=X or refit=(X, y) with cv_split')
-    else:
+    if (cv_split and refit_Xy is None) or (refit_Xy is not None and not cv_split):
+        raise ValueError('Expected refit=X or refit=(X, y) with cv_split')
+    if not cv_split:
         cv_split = _cv_split
-
     if fit_params:
         # A mapping of {name: (name, graph-key)}
         param_values = to_indexable(*fit_params.values(), allow_scalars=True)
@@ -143,17 +142,16 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     dsk[cv_results] = (create_cv_results, scores, candidate_params_name,
                        n_splits, error_score, weights, metrics)
     keys = [cv_results]
-    if _is_arraylike(refit):
-        if isinstance(refit, (tuple, list)) and len(refit) == 2:
-            X_name, y_name = refit
-        else:
-            X_name = refit
+    if isinstance(refit_Xy, (tuple, list)) and len(refit_Xy) == 2:
+        X_name, y_name = refit_Xy
+    elif refit_Xy is not None:
+        X_name = refit_Xy
+    if multimetric:
+        scorer = refit
+    else:
+        scorer = 'score'
 
-    if refit is True or not isinstance(refit, bool):
-        if multimetric:
-            scorer = refit
-        else:
-            scorer = 'score'
+    if refit is True or isinstance(refit, str):
         best_params = 'best-params-' + main_token
         dsk[best_params] = (get_best_params, candidate_params_name, cv_results,
                             scorer)
@@ -751,7 +749,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         return self.cv_results_['mean_test_{}'.format(key)][self.best_index_]
 
     def _check_is_fitted(self, method_name):
-        if not _is_arraylike(self.refit) and not self.refit:
+        if not self.refit:
             msg = ('This {0} instance was initialized with refit=False. {1} '
                    'is available only after refitting on the best '
                    'parameters.').format(type(self).__name__, method_name)
@@ -826,14 +824,17 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             Parameters passed to the ``fit`` method of the estimator
         """
         estimator = self.estimator
+        cv_split, refit_Xy = getattr(self,
+                                     '_get_cv_split_refit_Xy',
+                                     lambda: (None, None))()
         if _HAS_MULTIPLE_METRICS:
             from sklearn.metrics.scorer import _check_multimetric_scoring
             scorer, multimetric = _check_multimetric_scoring(estimator,
                                                              scoring=self.scoring)
             if not multimetric:
                 scorer = scorer['score']
-            self.multimetric_ = multimetric
 
+            self.multimetric_ = multimetric
             if self.multimetric_:
                 if self.refit is not False and (
                         not isinstance(self.refit, str) or
@@ -848,30 +849,25 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                                      "needed, refit should be set to False "
                                      "explicitly. %r was passed." % self.refit)
         else:
-            scorer = check_scoring(estimator, scoring=self.scoring)
+            scorer = check_scoring(estimator, scoring=scoring)
             multimetric = False
-
         self.scorer_ = scorer
-
         error_score = self.error_score
         if not (isinstance(error_score, numbers.Number) or
                 error_score == 'raise'):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
-
-        cv_split = getattr(self, '_get_cv_split', None)
-        if cv_split:
-            cv_split = cv_split()
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
                                           list(self._get_param_iterator()),
                                           X, y, groups, fit_params,
                                           iid=self.iid,
                                           refit=self.refit,
+                                          refit_Xy=refit_Xy,
                                           error_score=error_score,
                                           return_train_score=self.return_train_score,
                                           cache_cv=self.cache_cv,
                                           cv_split=cv_split,
-                                          multimetric=multimetric)
+                                          multimetric=self.multimetric_)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
@@ -882,8 +878,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
         results = handle_deprecated_train_score(out[0], self.return_train_score)
         self.cv_results_ = results
-
-        if (cv_split and not isinstance(self.refit, bool) or self.refit):
+        if self.refit:
             if _HAS_MULTIPLE_METRICS and self.multimetric_:
                 key = self.refit
             else:
