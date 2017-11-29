@@ -34,11 +34,12 @@ from sklearn.utils.validation import _num_samples, check_is_fitted
 
 from ._normalize import normalize_estimator
 from .methods import (fit, fit_transform, fit_and_score, pipeline, fit_best,
-                      get_best_params, create_cv_results, cv_split,
+                      get_best_params, create_cv_results, cv_split as _cv_split,
                       cv_n_samples, cv_extract, cv_extract_params,
                       decompress_params, score, feature_union,
                       feature_union_concat, MISSING)
-from .utils import to_indexable, to_keys, unzip, is_dask_collection
+from .utils import (to_indexable, to_keys,
+                    unzip, is_dask_collection,)
 from ._compat import _HAS_MULTIPLE_METRICS, _SK_VERSION
 
 try:
@@ -86,8 +87,10 @@ class TokenIterator(object):
 
 def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
                 groups=None, fit_params=None, iid=True, refit=True,
-                error_score='raise',
+                refit_Xy=None,
                 return_train_score=_RETURN_TRAIN_SCORE_DEFAULT, cache_cv=True,
+                error_score='raise',
+                cv_split=None,
                 multimetric=False):
 
     X, y, groups = to_indexable(X, y, groups)
@@ -98,7 +101,10 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     dsk = {}
     X_name, y_name, groups_name = to_keys(dsk, X, y, groups)
     n_splits = compute_n_splits(cv, X, y, groups)
-
+    if (cv_split and refit_Xy is None) or (refit_Xy is not None and not cv_split):
+        raise ValueError('Expected refit=X or refit=(X, y) with cv_split')
+    if not cv_split:
+        cv_split = _cv_split
     if fit_params:
         # A mapping of {name: (name, graph-key)}
         param_values = to_indexable(*fit_params.values(), allow_scalars=True)
@@ -111,7 +117,6 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     main_token = tokenize(normalize_estimator(estimator), fields, params,
                           X_name, y_name, groups_name, fit_params, cv,
                           error_score == 'raise', return_train_score)
-
     cv_name = 'cv-split-' + main_token
     dsk[cv_name] = (cv_split, cv, X_name, y_name, groups_name,
                     is_pairwise, cache_cv)
@@ -137,13 +142,16 @@ def build_graph(estimator, cv, scorer, candidate_params, X, y=None,
     dsk[cv_results] = (create_cv_results, scores, candidate_params_name,
                        n_splits, error_score, weights, metrics)
     keys = [cv_results]
+    if isinstance(refit_Xy, (tuple, list)) and len(refit_Xy) == 2:
+        X_name, y_name = refit_Xy
+    elif refit_Xy is not None:
+        X_name = refit_Xy
+    if multimetric:
+        scorer = refit
+    else:
+        scorer = 'score'
 
-    if refit:
-        if multimetric:
-            scorer = refit
-        else:
-            scorer = 'score'
-
+    if refit is True or isinstance(refit, str):
         best_params = 'best-params-' + main_token
         dsk[best_params] = (get_best_params, candidate_params_name, cv_results,
                             scorer)
@@ -816,14 +824,17 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
             Parameters passed to the ``fit`` method of the estimator
         """
         estimator = self.estimator
+        cv_split, refit_Xy = getattr(self,
+                                     '_get_cv_split_refit_Xy',
+                                     lambda: (None, None))()
         if _HAS_MULTIPLE_METRICS:
             from sklearn.metrics.scorer import _check_multimetric_scoring
             scorer, multimetric = _check_multimetric_scoring(estimator,
                                                              scoring=self.scoring)
             if not multimetric:
                 scorer = scorer['score']
-            self.multimetric_ = multimetric
 
+            self.multimetric_ = multimetric
             if self.multimetric_:
                 if self.refit is not False and (
                         not isinstance(self.refit, str) or
@@ -838,26 +849,25 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                                      "needed, refit should be set to False "
                                      "explicitly. %r was passed." % self.refit)
         else:
-            scorer = check_scoring(estimator, scoring=self.scoring)
+            scorer = check_scoring(estimator, scoring=scoring)
             multimetric = False
-
         self.scorer_ = scorer
-
         error_score = self.error_score
         if not (isinstance(error_score, numbers.Number) or
                 error_score == 'raise'):
             raise ValueError("error_score must be the string 'raise' or a"
                              " numeric value.")
-
         dsk, keys, n_splits = build_graph(estimator, self.cv, self.scorer_,
                                           list(self._get_param_iterator()),
                                           X, y, groups, fit_params,
                                           iid=self.iid,
                                           refit=self.refit,
+                                          refit_Xy=refit_Xy,
                                           error_score=error_score,
                                           return_train_score=self.return_train_score,
                                           cache_cv=self.cache_cv,
-                                          multimetric=multimetric)
+                                          cv_split=cv_split,
+                                          multimetric=self.multimetric_)
         self.dask_graph_ = dsk
         self.n_splits_ = n_splits
 
@@ -868,7 +878,6 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
 
         results = handle_deprecated_train_score(out[0], self.return_train_score)
         self.cv_results_ = results
-
         if self.refit:
             if _HAS_MULTIPLE_METRICS and self.multimetric_:
                 key = self.refit
@@ -1006,7 +1015,6 @@ cache_cv : bool, default=True
     process, or every time that subset is needed. Caching the splits can
     speedup computation at the cost of increased memory usage per worker
     process.
-
     If True, worst case memory usage is ``(n_splits + 1) * (X.nbytes +
     y.nbytes)`` per worker. If False, worst case memory usage is
     ``(n_threads_per_worker + 1) * (X.nbytes + y.nbytes)`` per worker.

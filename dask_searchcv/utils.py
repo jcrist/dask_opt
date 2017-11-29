@@ -8,6 +8,7 @@ from dask.delayed import delayed, Delayed
 
 from sklearn.utils.validation import indexable, _is_arraylike
 
+from ._compat import _HAS_MULTIPLE_METRICS, _SK_VERSION
 
 if LooseVersion(dask.__version__) > '0.15.4':
     from dask.base import is_dask_collection

@@ -48,7 +48,7 @@ from dask_searchcv._compat import _HAS_MULTIPLE_METRICS
 from dask_searchcv.methods import CVCache
 from dask_searchcv.utils_test import (FailingClassifier, MockClassifier,
                                       ScalingTransformer, CheckXClassifier,
-                                      ignore_warnings)
+                                      ignore_warnings, MockUnsupervised)
 
 try:
     from distributed import Client
@@ -652,6 +652,109 @@ def test_scheduler_param_distributed(loop):
 def test_scheduler_param_bad():
     with pytest.raises(ValueError):
         _normalize_scheduler('threeding', 4)
+
+
+class CacheCVLike(CVCache):
+    called = 0
+
+    def __init__(self, splits=None, pairwise=False, cache=True):
+        CVCache.__init__(self, splits=splits, pairwise=pairwise, cache=cache)
+
+    def extract(self, X, y, n, is_x=True, is_train=True):
+        CacheCVLike.called += 1
+        X, y = self.make_data()
+        if is_x:
+            return X
+        else:
+            return y
+
+    def make_data(self):
+        return make_classification(n_samples=100,
+                                   n_features=5,
+                                   random_state=0)
+
+
+class BadCacheCV(CVCache):
+
+    extract = CVCache.extract
+
+
+example_arguments = ['argument_{}'.format(_) for _ in range(15)]
+
+
+def cv_split_X_y_ok(cv, X, y, groups, is_pairwise, cache):
+    for xi in X:
+        # normally one would use elements of X to inform how
+        # a sample should be drawn, e.g. filenames (see example_arguments above)
+        assert hasattr(xi, 'startswith') and xi.startswith('argument_')
+    return CacheCVLike(list(cv.split(X, y, groups)), is_pairwise, cache)
+
+
+def cv_split_X_ok(cv, X, y, groups, is_pairwise, cache):
+    return CacheCVLike(list(cv.split(X, y, groups)), is_pairwise, cache)
+
+
+def cv_split_bad(cv, X, y, groups, is_pairwise, cache):
+    return BadCacheCV(list(cv.split(X, y, groups)), is_pairwise, cache)
+
+
+@pytest.mark.parametrize('cv_split, refit, should_pass', [
+    (cv_split_X_y_ok, True, False),
+    (cv_split_X_y_ok, False, False),
+    (cv_split_X_y_ok, 'sample_xy', True),
+    (cv_split_X_ok, True, False),
+    (cv_split_X_ok, False, False),
+    (cv_split_X_ok, 'sample_x', True),
+    (cv_split_bad, True, False),      # fails as fit gets ['argument_0', ....]
+                                      # as X rather than a feature matrix
+    (cv_split_bad, False, False),
+    (cv_split_bad, 'sample_xy', False),
+])
+def test_cv_cache_instance_to_search(cv_split, refit, should_pass):
+    n_splits = 3
+    cv = KFold(n_splits)
+    pg = {'foo_param': list(range(2, 100))}
+    CacheCVLike.called = 0
+    if not isinstance(refit, bool):
+        Xy = make_classification(n_samples=100,
+                                 n_features=5,
+                                 random_state=0)
+        if refit == 'sample_x':
+            estimator = MockUnsupervised()
+            Xy = Xy[0]
+        else:
+            estimator = MockClassifier()
+        refit = True
+    else:
+        estimator = MockClassifier()
+
+    class GridSearchCVSampler(dcv.GridSearchCV):
+
+        def _get_cv_split_refit_Xy(self, *a, **kw):
+            return cv_split, Xy
+
+    def fit_pred():
+        gs = GridSearchCVSampler(estimator,
+                                 pg,
+                                 cv=cv,
+                                 refit=refit)
+
+        gs.fit(example_arguments)
+        X, _ = make_classification(n_samples=100,
+                                   n_features=10,
+                                   random_state=0)
+        pred = gs.predict(X)
+        return pred, gs.cv_results_
+
+    if should_pass:
+        pred, cv_results_ = fit_pred()
+        assert pred == 100
+        calls_expected = n_splits * len(pg['foo_param']) * 2 * 2
+        assert CacheCVLike.called == calls_expected
+        assert pd.DataFrame(cv_results_).shape[0] == len(pg['foo_param'])
+    else:
+        with pytest.raises(Exception):
+            fit_pred()
 
 
 @pytest.mark.skipif(not _HAS_MULTIPLE_METRICS, reason="Added in 0.19.0")
