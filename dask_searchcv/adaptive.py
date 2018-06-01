@@ -2,6 +2,7 @@ import math
 import numpy as np
 import scipy.stats as stats
 from functools import partial
+from pprint import pprint
 
 import sklearn
 try:
@@ -41,6 +42,7 @@ def _top_k(choose_from, eval_with, k=1):
     assert set(choose_from.keys()) == set(eval_with.keys())
 
     keys = list(choose_from.keys())
+    assert k <= len(keys)
 
     eval_with = [eval_with[key] for key in keys]
     idx = np.argsort(eval_with)
@@ -50,15 +52,15 @@ def _top_k(choose_from, eval_with, k=1):
 
 def _random_choice(params, n=1):
     configs = ParameterSampler(params, n)
-    return [{k: float(v) for k, v in config.items()}
-            for config in configs]
+    return [{k: v[0] if isinstance(v, np.ndarray) and v.ndim == 1 else v
+             for k, v in config.items()} for config in configs]
 
 
 def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
                         shared=None, eta=3, _prefix=''):
     client = distributed.get_client()
     data = client.get_dataset('_dask_data')
-    best = {k: shared[k] for k in ['val_loss', 'model', 'config']}
+    best = {k: shared[k] for k in ['val_score', 'model', 'config']}
     classes = shared['classes'].get()
 
     if any(x is None for x in [n, r, s]):
@@ -67,7 +69,7 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
     params = _random_choice(params, n=len(ids))
     params = {k: param for k, param in zip(ids, params)}
     models = {}
-    final_val_losses = {k: np.inf for k in ids}
+    final_val_scores = {k: -np.inf for k in ids}
     for k, param in params.items():
         models[k] = clone(model).set_params(**param)
 
@@ -89,25 +91,24 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
                                     *data['val'], max_iter=r_i, classes=classes,
                                     s=s, i=i, k=k, verbose=verbose)
                       for k, model in models.items()}
-        val_losses = client.gather(futures)
-        final_val_losses.update(val_losses)
+        val_scores = client.gather(futures)
+        final_val_scores.update(val_scores)
+        history += [{'s': s, 'i': i, 'val_score': val_scores[k], 'model_id': k,
+                     'iters': iters, **params[k]}
+                     for k, model, in models.items()]
 
-        models = _top_k(models, val_losses, k=max(1, math.floor(n_i / eta)))
+        models = _top_k(models, val_scores, k=max(1, math.floor(n_i / eta)))
+        d = {k: val_scores[k] for k in models}
 
         best_ = {k: v.get() for k, v in best.items()}
-        if min(final_val_losses.values()) < best_['val_loss']:
-            min_loss_key = min(final_val_losses, key=final_val_losses.get)
-            best_['val_loss'] = val_losses[min_loss_key]
-            best_['config'] = params[min_loss_key]
-            #  best_['model'] = models[min_loss_key]
+        if max(final_val_scores.values()) > best_['val_score']:
+            max_loss_key = max(final_val_scores, key=final_val_scores.get)
+            best_['val_score'] = final_val_scores[max_loss_key]
+            best_['config'] = params[max_loss_key]
             [best[k].set(v) for k, v in best_.items()]
             if verbose:
-                print("New best val_loss={} found".format(best_['val_loss']))
+                print("New best val_score={} found".format(best_['val_score']))
 
-        history += [{'s': s, 'i': i, 'val_loss': val_losses[k], 'model_id': k,
-                     'iters': iters, 'best_val_loss': best_['val_loss'],
-                     **params[k]}
-                     for k, model, in models.items()]
         if len(models) == 1:
             break
     return history
@@ -148,13 +149,22 @@ class Hyperband:
         the amount of computational effort required, alongside some other
         information (number of splits, etc).
 
+        This is a general interface; ``model`` can be any class that
+
+        * implements ``model.set_params(**kwargs) -> model``
+        * implements ``model.partial_fit(X, y, classes)``.
+          ``classes`` can be ``np.unique(y_total)``.
+        * implements ``model.score(X, y) -> number``
+        * supports ``sklearn.base.clone(model, safe=True)``. Support for this
+          function comes down to having an function ``get_params``.
+
         .. _Hyperband model selection algorithm: https://arxiv.org/abs/1603.06560
         """
         self.params = params
         self.model = model
         self.R = iters
         self.eta = eta
-        self.best_val_loss = np.inf
+        self.best_val_score = -np.inf
         self.n_iter = 0
         self.classes = np.unique(y)
 
@@ -167,7 +177,7 @@ class Hyperband:
 
         X_train, X_val, y_train, y_val = train_test_split(X, y)
 
-        self.data = {'train': (X_train, y_train), 'val': (X_val, y_val)}
+        self.data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
         self.history = []
         self._base_id = 0
 
@@ -179,7 +189,7 @@ class Hyperband:
         """
         client = distributed.get_client()
 
-        variables = {'val_loss': np.inf, 'model': None, 'config': None,
+        variables = {'val_score': -np.inf, 'model': None, 'config': None,
                      'classes': self.classes.tolist(), 'eta': self.eta,
                      'history': []}
         shared = {}
@@ -189,6 +199,9 @@ class Hyperband:
 
         if '_dask_data' in client.list_datasets():
             client.unpublish_dataset('_dask_data')
+        for key in self.data.keys():
+            self.data[key][0] = client.scatter(self.data[key][0])
+            self.data[key][1] = client.scatter(self.data[key][1])
         client.publish_dataset(_dask_data=self.data)
 
         # now start hyperband
@@ -213,4 +226,4 @@ class Hyperband:
 
         self.history = history
 
-        return tuple([shared[k].get() for k in ['val_loss', 'config']])
+        return tuple([shared[k].get() for k in ['val_score', 'config']])
