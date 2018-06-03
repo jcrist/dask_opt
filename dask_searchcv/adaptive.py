@@ -14,7 +14,6 @@ from dask_ml.model_selection._split import train_test_split
 from sklearn import clone
 from sklearn.model_selection import ParameterSampler
 
-import distributed
 import dask.array as da
 from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
@@ -36,11 +35,11 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False, classes=None,
         if not dry_run:
             _ = model.partial_fit(X, y, classes, **fit_kwargs)
         elif iter == 0:
-            _ = model.partial_fit(X[0:2], y[0:2], classes)
+            _ = model.partial_fit(X[0:2], y[0:2], classes, **fit_kwargs)
     fit_time = default_timer() - start_time
 
     start_time = default_timer()
-    score = model.score(X_val, y_val, **fit_kwargs) if not dry_run else np.random.rand()
+    score = model.score(X_val, y_val) if not dry_run else np.random.rand()
     score_time = default_timer() - start_time
     return score, {'score_time': score_time, 'fit_time': fit_time}
 
@@ -66,7 +65,7 @@ def _random_choice(params, n=1):
 
 def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
                         shared=None, eta=3, _prefix='', dry_run=False, **fit_kwargs):
-    client = distributed.get_client()
+    client = _get_client()
     data = client.get_dataset('_dask_data')
     best = {k: shared[k] for k in ['val_score', 'model', 'config']}
     classes = shared['classes'].get()
@@ -80,9 +79,6 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
     final_val_scores = {k: -np.inf for k in ids}
     for k, param in params.items():
         models[k] = clone(model).set_params(**param)
-
-    # TODO: manage memory with below
-    #  models = client.scatter(models)
 
     history = []
     iters = 0
@@ -134,7 +130,8 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
 
 
 class Hyperband(DaskBaseSearchCV):
-    def __init__(self, model, params, max_iter=81, eta=3, **kwargs):
+    def __init__(self, model, params, max_iter=81, eta=3,
+                 run_in_parallel=True, **kwargs):
         """
         An adaptive model selection method that trains models with
         ``model.partial_fit`` and evaluates models with ``model.score``.
@@ -157,6 +154,12 @@ class Hyperband(DaskBaseSearchCV):
         eta : optional, int
             How aggressive to be while search. The default is 3, and theory
             suggests that ``eta=e=2.718...``. Changing this is not recommended.
+
+        run_in_parallel : bool, optional
+            Hyperband depends on another function, and they are completely
+            indepdenent of one another and can be run embarassingly parallel.
+            This value (which defaults to True) controls whether these should
+            be submitted to the dask.distributed scheduler or not.
 
         Attributes
         ----------
@@ -205,6 +208,7 @@ class Hyperband(DaskBaseSearchCV):
         self.eta = eta
         self.best_val_score = -np.inf
         self.n_iter = 0
+        self.run_in_parallel = run_in_parallel
 
         if not hasattr(model, 'warm_start'):
             warnings.warn('model has no attribute warm_start. Hyperband will assume it '
@@ -226,12 +230,7 @@ class Hyperband(DaskBaseSearchCV):
 
     def fit(self, X, y, dry_run=False, verbose=False, **fit_kwargs):
         """
-        This implicitly assumes that higher scores are better.
-
-        Returns
-        -------
-        val_score : float
-            The best
+        This function implicitly assumes that higher scores are better.
 
         This is a general interface; ``model`` can be any class that
 
@@ -243,7 +242,8 @@ class Hyperband(DaskBaseSearchCV):
           function comes down to having an function ``get_params``.
 
         """
-        client = distributed.get_client()
+        import distributed
+        client = _get_client()
 
         variables = {'val_score': -np.inf, 'model': None, 'config': None,
                      'classes': np.unique(y).tolist(), 'eta': self.eta,
@@ -276,14 +276,15 @@ class Hyperband(DaskBaseSearchCV):
                         'shared': shared, '_prefix': f's={s}',
                         'verbose': verbose}]
 
-        #  futures = [client.submit(_successive_halving, self.params,
-                                 #  self.model, **kwarg)
-                   #  for kwarg in kwargs]
-        #  results = client.gather(futures)
-
-        futures = [_successive_halving(self.params, self.model, **kwarg, **fit_kwargs)
-                   for kwarg in kwargs]
-        results = futures
+        if self.run_in_parallel:
+            futures = [client.submit(_successive_halving, self.params,
+                                     self.model, **kwarg, **fit_kwargs)
+                       for kwarg in kwargs]
+            results = client.gather(futures)
+        else:
+            results = [_successive_halving(self.params, self.model, **kwarg,
+                                           **fit_kwargs)
+                       for kwarg in kwargs]
 
         all_keys = reduce(lambda x, y: x + y, [list(r['params'].keys()) for r in results])
 
@@ -380,3 +381,7 @@ def _get_best_model(val_scores, models):
     scores = {k: val_scores[k] for k in models}
     best_id = max(scores, key=scores.get)
     return models[best_id]
+
+def _get_client():
+    import distributed
+    return distributed.get_client()

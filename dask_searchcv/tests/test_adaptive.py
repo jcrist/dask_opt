@@ -12,7 +12,7 @@ import scipy.stats as stats
 
 
 class TestFunction:
-    def fn(self):
+    def _fn(self):
         return self.value
 
     def get_params(self, deep=None, **kwargs):
@@ -27,7 +27,7 @@ class TestFunction:
         pass
 
     def score(self, *args, **kwargs):
-        return self.fn()
+        return self._fn()
 
 
 def test_hyperband_sklearn():
@@ -38,7 +38,7 @@ def test_hyperband_sklearn():
 
     params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
               'l1_ratio': np.linspace(0, 1, num=int(10e3))}
-    alg = Hyperband(model, params, max_iter=9)
+    alg = Hyperband(model, params, max_iter=9, run_in_parallel=False)
 
     alg.fit(X, y, dry_run=True)
     assert len(alg.history) == 20
@@ -57,7 +57,7 @@ def test_hyperband_test_model():
     values = np.random.RandomState(42).rand(int(max_iter))
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
-        alg = Hyperband(model, params, max_iter=max_iter)
+        alg = Hyperband(model, params, max_iter=max_iter, run_in_parallel=False)
 
     alg.fit(X, y)
 
@@ -79,7 +79,7 @@ def test_info():
     values = np.random.RandomState(42).rand(int(max_iter))
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
-        alg = Hyperband(model, params, max_iter=max_iter)
+        alg = Hyperband(model, params, max_iter=max_iter, run_in_parallel=False)
 
     info = alg.info()
     expect = {'brackets': [{'bracket': 0.0,
@@ -119,14 +119,14 @@ def test_hyperband_with_distributions():
     values.random_state = np.random.RandomState(42)
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
-        alg = Hyperband(model, params, max_iter=max_iter)
+        alg = Hyperband(model, params, max_iter=max_iter, run_in_parallel=False)
 
     alg.fit(X, y)
     similar_to_test = stats.uniform(0, 1)
-    similar_to_test = tested_values.rvs(alg.info()['num_models'])
+    similar_to_test = similar_to_test.rvs(alg.info()['num_models'])
 
     assert len(alg.cv_results_['param_value']) == len(similar_to_test)
-    assert alg.cv_results_['test_score'].max() > 0.97
+    assert max(alg.cv_results_['test_score']) > 0.97
 
 
 def test_top_k(k=2):
