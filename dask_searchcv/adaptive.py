@@ -4,7 +4,9 @@ import scipy.stats as stats
 from functools import partial
 from pprint import pprint
 from toolz import reduce
+import toolz
 import warnings
+from timeit import default_timer
 
 import sklearn
 from dask_ml.model_selection._split import train_test_split
@@ -14,7 +16,7 @@ from sklearn.model_selection import ParameterSampler
 
 import distributed
 import dask.array as da
-from .model_selection import DaskBaseSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
+from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
 
 def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False, classes=None,
@@ -25,6 +27,7 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False, classes=None,
     Takes max_iters as parameters. THese are treated as a "scarce resource" --
     Hyperband is trying to minimize the total iters use for max_iters.
     """
+    start_time = default_timer()
     for iter in range(int(max_iter)):
         if verbose:
             msg = ("Training model {k} in bracket s={s} iteration {i}. "
@@ -34,9 +37,12 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False, classes=None,
             _ = model.partial_fit(X, y, classes, **fit_kwargs)
         elif iter == 0:
             _ = model.partial_fit(X[0:2], y[0:2], classes)
+    fit_time = default_timer() - start_time
 
+    start_time = default_timer()
     score = model.score(X_val, y_val, **fit_kwargs) if not dry_run else np.random.rand()
-    return score
+    score_time = default_timer() - start_time
+    return score, {'score_time': score_time, 'fit_time': fit_time}
 
 
 def _top_k(choose_from, eval_with, k=1):
@@ -54,8 +60,8 @@ def _top_k(choose_from, eval_with, k=1):
 
 def _random_choice(params, n=1):
     configs = ParameterSampler(params, n)
-    return [{k: v[0] if isinstance(v, np.ndarray) and v.ndim == 1 else v
-             for k, v in config.items()} for config in configs]
+    return [{k: v if not isinstance(v, np.ndarray) else da.from_array(v)
+            for k, v in config.items()} for config in configs]
 
 
 def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
@@ -80,6 +86,7 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
 
     history = []
     iters = 0
+    times = []
     for i in range(s + 1):
         n_i = math.floor(n * eta**-i)
         r_i = r * eta**i
@@ -94,7 +101,11 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
                                     k=k, verbose=verbose, dry_run=dry_run,
                                     **fit_kwargs)
                       for k, model in models.items()}
-        val_scores = client.gather(futures)
+        results = client.gather(futures)
+
+        val_scores = {k: r[0] for k, r in results.items()}
+        times += [{'id': k, **r[1]} for k, r in results.items()]
+
         final_val_scores.update(val_scores)
         history += [{'s': s, 'i': i, 'val_score': val_scores[k], 'model_id': k,
                      'iters': iters, 'num_models': len(val_scores), **params[k]}
@@ -113,8 +124,13 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
 
         if len(models) == 1:
             break
+
+    times = toolz.groupby('id', times)
+    times = {k: [toolz.keyfilter(lambda key: key != 'id', vi) for vi in v]
+             for k, v in times.items()}
+    times = {k: toolz.merge_with(sum, v) for k, v in times.items()}
     return {'history': history, 'final_val_scores': final_val_scores,
-            'params': params, 'models': models}
+            'params': params, 'models': models, 'times': times}
 
 
 class Hyperband(DaskBaseSearchCV):
@@ -204,7 +220,7 @@ class Hyperband(DaskBaseSearchCV):
                              error_score='raise', return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
                              scheduler=None, n_jobs=-1, cache_cv=True)
         for k, v in super_default.items():
-            if kwargs[k] != super_default[k]:
+            if k in kwargs and kwargs[k] != super_default[k]:
                 warnings.warn('Hyperband ignores the keyword argument {k}.')
         super(Hyperband, self).__init__(model, **kwargs)
 
@@ -272,16 +288,16 @@ class Hyperband(DaskBaseSearchCV):
         all_keys = reduce(lambda x, y: x + y, [list(r['params'].keys()) for r in results])
 
         history = sum([r['history'] for r in results], [])
-        models = reduce(lambda x, y: {**x, **y},
-                        [r['models'] for r in results])
-        params = reduce(lambda x, y: {**x, **y},
-                        [r['params'] for r in results])
-        val_scores = reduce(lambda x, y: {**x, **y},
-                            [r['final_val_scores'] for r in results])
+        models = toolz.merge([r['models'] for r in results])
+        params = toolz.merge([r['params'] for r in results])
+        times = toolz.merge([r['times'] for r in results])
+        val_scores = toolz.merge([r['final_val_scores'] for r in results])
+
         assert set(all_keys) == set(val_scores.keys())
         assert set(all_keys) == set(params.keys())
 
-        cv_results_, best_idx = _get_cv_results(params=params, val_scores=val_scores)
+        cv_results_, best_idx = _get_cv_results(params=params, val_scores=val_scores,
+                                                times=times)
 
         #  self.best_params_ = cv_results_[best_idx]['params']
         self.best_index_ = best_idx
@@ -303,7 +319,7 @@ class Hyperband(DaskBaseSearchCV):
 
             * num_partial_fit_calls : total number of times partial_fit is called
             * num_models : the total number of models evaluated
-            * num_splits : number of cross validation splits
+            * num_cv_splits : number of cross validation splits
             * brackets : a list of dicts, importable into pandas.DataFrame. Each value has a key of
                 * bracket : the Hyperband bracket number. It runs several
                   brackets to balance the explore/exploit tradeoff (should you
@@ -331,7 +347,7 @@ class Hyperband(DaskBaseSearchCV):
                     for v in values]
 
         return {'num_models': len(df.model_id.unique()),
-                'total_iters': df.iters.sum(),
+                'num_partial_fit_calls': df.iters.sum(),
                 'num_cv_splits': 1,
                 'brackets': brackets}
 
@@ -343,24 +359,21 @@ def _LDtoDL(ld):
     return values
 
 
-def _get_cv_results(params=None, val_scores=None):
-    assert set(params.keys()) == set(val_scores.keys())
+def _get_cv_results(params=None, val_scores=None, times=None):
+    assert set(params.keys()) == set(val_scores.keys()) == set(times.keys())
 
     cv_results = []
-    best_idx = None
-    best_score = -np.inf
+    best = {'index': None, 'score': -np.inf}
     for i, k in enumerate(val_scores.keys()):
-        result = {'params': params[k], 'test_score': val_scores[k]}
+        result = {'params': params[k], 'test_score': val_scores[k], **times[k]}
         result.update({'param_' + param: v for param, v in params[k].items()})
         cv_results += [result]
 
-        if result['test_score'] > best_score:
-            best_idx = i
-            best_score = result['test_score']
+        if result['test_score'] > best['score']:
+            best = {'index': i, 'score': result['test_score']}
 
     cv_results = _LDtoDL(cv_results)
-
-    return cv_results, best_idx
+    return cv_results, best['index']
 
 
 def _get_best_model(val_scores, models):
