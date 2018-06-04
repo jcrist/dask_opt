@@ -116,16 +116,15 @@ def test_hyperband_with_distributions():
     max_iter = 81
 
     values = stats.uniform(0, 1)
+    np.random.seed(42)
     values.random_state = np.random.RandomState(42)
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
         alg = Hyperband(model, params, max_iter=max_iter, run_in_parallel=False)
 
     alg.fit(X, y)
-    similar_to_test = stats.uniform(0, 1)
-    similar_to_test = similar_to_test.rvs(alg.info()['num_models'])
 
-    assert len(alg.cv_results_['param_value']) == len(similar_to_test)
+    assert len(alg.cv_results_['param_value']) == alg.info()['num_models']
     assert max(alg.cv_results_['test_score']) > 0.97
 
 
