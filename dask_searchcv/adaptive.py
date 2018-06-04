@@ -34,8 +34,6 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False, classes=None,
             print(msg.format(iter=iter, k=k, s=s, i=i, percent=iter * 100.0 / max_iter))
         if not dry_run:
             _ = model.partial_fit(X, y, classes, **fit_kwargs)
-        elif iter == 0:
-            _ = model.partial_fit(X[0:2], y[0:2], classes, **fit_kwargs)
     fit_time = default_timer() - start_time
 
     start_time = default_timer()
@@ -337,7 +335,7 @@ class Hyperband(DaskBaseSearchCV):
         import pandas as pd
         X = da.from_array(np.random.rand(2, 2), 2)
         y = da.from_array(np.random.rand(2, 2), 2)
-        self.fit(X, y, verbose=False)
+        self.fit(X, y, verbose=False, dry_run=True)
         df = pd.DataFrame(self.history)
 
         brackets = df[['s', 'i', 'iters', 'num_models']]
