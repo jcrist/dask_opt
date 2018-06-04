@@ -9,6 +9,7 @@ import pytest
 import distributed
 from pprint import pprint
 import scipy.stats as stats
+import random
 
 
 class TestFunction:
@@ -33,7 +34,8 @@ class TestFunction:
 def test_hyperband_sklearn():
     client = _get_client()
     X, y = make_classification(n_samples=1000, chunks=500)
-    model = PartialSGDClassifier(warm_start=True, classes=da.unique(y),
+    classes = da.unique(y)
+    model = PartialSGDClassifier(warm_start=True, classes=classes,
                                  loss='hinge', penalty='elasticnet')
 
     params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
@@ -45,7 +47,7 @@ def test_hyperband_sklearn():
     alg.fit(X, y, dry_run=True)
     assert len(alg.history) == 40
 
-    alg.fit(X, y)  # make sure no exceptions are raised
+    alg.fit(X, y, classes=classes)  # make sure no exceptions are raised
 
 
 def test_hyperband_test_model():
@@ -116,8 +118,7 @@ def test_hyperband_with_distributions():
     max_iter = 81
 
     values = stats.uniform(0, 1)
-    np.random.seed(42)
-    values.random_state = np.random.RandomState(42)
+
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
         alg = Hyperband(model, params, max_iter=max_iter, run_in_parallel=False)
@@ -125,7 +126,6 @@ def test_hyperband_with_distributions():
     alg.fit(X, y)
 
     assert len(alg.cv_results_['param_value']) == alg.info()['num_models']
-    assert max(alg.cv_results_['test_score']) > 0.97
 
 
 def test_top_k(k=2):
