@@ -2,11 +2,11 @@ import math
 import numpy as np
 import scipy.stats as stats
 from functools import partial
-from pprint import pprint
 from toolz import reduce
 import toolz
 import warnings
 from timeit import default_timer
+import logging
 
 import sklearn
 from dask_ml.model_selection._split import train_test_split
@@ -16,6 +16,8 @@ from sklearn.model_selection import ParameterSampler
 
 import dask.array as da
 from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
+
+logger = logging.getLogger(__name__)
 
 
 def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
@@ -44,13 +46,15 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
     """
     start_time = default_timer()
     for iter in range(int(max_iter)):
-        if verbose:
-            msg = ("Training model {k} in bracket s={s} iteration {i}. "
-                   "This model is {percent:.1f}% trained for this bracket")
-            print(msg.format(iter=iter, k=k, s=s, i=i, percent=iter * 100.0 / max_iter))
+        msg = ("Training model {k} in bracket s={s} iteration {i}. "
+               "This model is {percent:.1f}% trained for this bracket")
+        logger.info(msg.format(iter=iter, k=k, s=s, i=i,
+                               percent=iter * 100.0 / max_iter))
         if not dry_run:
             _ = model.partial_fit(X, y, **fit_kwargs)
     fit_time = default_timer() - start_time
+    msg = ("Training model {k} for {max_iter} partial_fit calls took {secs} seconds")
+    logger.info(msg.format(k=k, max_iter=max_iter, secs=fit_time))
 
     start_time = default_timer()
     score = model.score(X_val, y_val) if not dry_run else np.random.rand()
@@ -82,6 +86,7 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
     """
     """
     client = _get_client()
+
     data = client.get_dataset('_dask_data')
     best = {k: shared[k] for k in ['val_score', 'model', 'config']}
 
@@ -102,10 +107,9 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
         n_i = math.floor(n * eta**-i)
         r_i = r * eta**i
         iters += r_i
-        if verbose:
-            msg = ('Training {n} models for {r} iterations during iteration {i} '
-                   'of bracket={s}')
-            print(msg.format(n=n_i, r=r_i, i=i, s=s))
+        msg = ('Training {n} models for {r} iterations during iteration {i} '
+               'of bracket={s}')
+        logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
         futures = {k: client.submit(_train, model, *data['train'], *data['val'],
                                     max_iter=r_i, s=s, i=i,
@@ -130,8 +134,7 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
             best_['val_score'] = final_val_scores[max_loss_key]
             best_['config'] = params[max_loss_key]
             [best[k].set(v) for k, v in best_.items()]
-            if verbose:
-                print("New best val_score={} found".format(best_['val_score']))
+            #  logger.info("New best val_score={} found".format(best_['val_score']))
 
         if len(models) == 1:
             break
@@ -378,6 +381,7 @@ def _LDtoDL(ld):
 
 
 def _get_cv_results(params=None, val_scores=None, times=None):
+    assert all([isinstance(x, dict) for x in [params, val_scores, times]])
     assert set(params.keys()) == set(val_scores.keys()) == set(times.keys())
 
     cv_results = []
@@ -399,6 +403,13 @@ def _get_best_model(val_scores, models):
     best_id = max(scores, key=scores.get)
     return models[best_id]
 
+
 def _get_client():
     import distributed
-    return distributed.get_client()
+    try:
+        return distributed.get_client()
+    except ValueError:
+        raise ValueError('No global distributed client found with '
+                         'distributed.get_client. To resolve this error, '
+                         'have an distributed client: '
+                         'https://distributed.readthedocs.io/en/latest/client.html')

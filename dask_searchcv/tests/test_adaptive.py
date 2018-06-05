@@ -128,6 +128,20 @@ def test_hyperband_with_distributions():
     assert len(alg.cv_results_['param_value']) == alg.info()['num_models']
 
 
+def test_hyperband_needs_client():
+    # make sure there's no client active
+    client = _get_client()
+    client.close()
+
+    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+    model = PartialSGDClassifier(classes=da.unique(y), warm_start=True)
+    params = {'value': np.logspace(-3, 0, num=100)}
+
+    alg = Hyperband(model, params, max_iter=81, run_in_parallel=False)
+    with pytest.raises(ValueError, match='No global distributed client found'):
+        alg.fit(X, y)
+
+
 def test_top_k(k=2):
     keys = range(10)
     scores = {str(i): -i for i in keys}
@@ -139,5 +153,6 @@ def test_top_k(k=2):
 def _get_client():
     try:
         client = distributed.get_client()
-    except:
+    except ValueError:
         client = Client()
+    return client
