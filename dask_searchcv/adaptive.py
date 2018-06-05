@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
-           s=1, i=1, k='_', verbose=False, **fit_kwargs):
+           s=1, i=1, k='_', **fit_kwargs):
     """
     Train function. Returns validation score.
 
@@ -32,7 +32,6 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
     max_iter : float, number of times to call partial_fit
     dry_run : whether to call partial_fit and score or not
     s, i, k : int or string, used for logging
-    verbose : bool, whether to log or not.
     fit_kwargs : dict, kwargs to pass to partial_fit
 
     Takes max_iters as parameters. THese are treated as a "scarce resource" --
@@ -81,8 +80,9 @@ def _random_choice(params, n=1):
             for k, v in config.items()} for config in configs]
 
 
-def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
-                        shared=None, eta=3, _prefix='', dry_run=False, **fit_kwargs):
+def _successive_halving(params, model, n=None, r=None, s=None,
+                        shared=None, eta=3, _prefix='', dry_run=False,
+                        **fit_kwargs):
     """
     """
     client = _get_client()
@@ -113,7 +113,7 @@ def _successive_halving(params, model, n=None, r=None, s=None, verbose=False,
 
         futures = {k: client.submit(_train, model, *data['train'], *data['val'],
                                     max_iter=r_i, s=s, i=i,
-                                    k=k, verbose=verbose, dry_run=dry_run,
+                                    k=k, dry_run=dry_run,
                                     **fit_kwargs)
                       for k, model in models.items()}
         results = client.gather(futures)
@@ -177,7 +177,7 @@ class Hyperband(DaskBaseSearchCV):
 
     Methods
     -------
-    fit(X, y, dry_run=False, verbose=False, **fit_kwargs)
+    fit(X, y, dry_run=False, **fit_kwargs)
         Find the best classifier.
     info()
         Get info about finding the best classifier (i.e., how many calls to
@@ -236,6 +236,9 @@ class Hyperband(DaskBaseSearchCV):
         else:
             if not model.warm_start:
                 raise ValueError('Hyperband relies on model(..., warm_start=True).')
+        if not hasattr(model, 'partial_fit'):
+            raise ValueError('Hyperband relies on the partial_fit. Without it '
+                             'it would be no different than RandomizedSearchCV')
 
         self.history = []
 
@@ -247,20 +250,23 @@ class Hyperband(DaskBaseSearchCV):
                 warnings.warn('Hyperband ignores the keyword argument {k}.')
         super(Hyperband, self).__init__(model, **kwargs)
 
-    def fit(self, X, y, dry_run=False, verbose=False, **fit_kwargs):
+    def fit(self, X, y, dry_run=False, **fit_kwargs):
         """
         This function requires an active dask.distribtued client as it uses
         the dask.distributed's concurrent.futures API.
 
-        This function implicitly assumes that higher scores are better.
+        This function implicitly assumes that higher scores are better. Note:
+        this matters if you are using a scoring function that measures loss,
+        where lower values imply a better model.
 
-        Any ``model`` with the following support can be used with ``fit``:
+        This function works with classes with a certain API, not only
+        scikit-learn estimators. It is assumed that the class
 
-        * implements ``model.set_params(**kwargs) -> model``
-        * implements ``model.partial_fit(X, y, **kwargs)``.
-        * implements ``model.score(X, y) -> number``
-        * supports ``sklearn.base.clone(model, safe=True)``. Support for this
-          function comes down to having an function ``get_params``.
+        * implements ``partial_fit(self, X, y, **kwargs)``.
+        * implements ``set_params(self, **kwargs) -> self``
+        * implements ``score(self, X, y) -> number``
+        * supports ``sklearn.base.clone(self, safe=True)``. Support for this
+          function comes down to having an function ``get_params(self)``.
 
         """
         import distributed
@@ -293,8 +299,7 @@ class Hyperband(DaskBaseSearchCV):
             n = math.ceil(B/R * eta**s / (s+1))
             r = R * eta ** -s
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
-                        'shared': shared, '_prefix': f's={s}',
-                        'verbose': verbose}]
+                        'shared': shared, '_prefix': f's={s}'}]
 
         if self.run_in_parallel:
             futures = [client.submit(_successive_halving, self.params,
@@ -357,7 +362,7 @@ class Hyperband(DaskBaseSearchCV):
         import pandas as pd
         X = da.from_array(np.random.rand(2, 2), 2)
         y = da.from_array(np.random.rand(2, 2), 2)
-        self.fit(X, y, verbose=False, dry_run=True)
+        self.fit(X, y, dry_run=True)
         df = pd.DataFrame(self.history)
 
         brackets = df[['s', 'i', 'iters', 'num_models']]
