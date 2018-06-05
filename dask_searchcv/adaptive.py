@@ -196,10 +196,15 @@ class Hyperband(DaskBaseSearchCV):
     optimal config from ``params`` given this computational effort
     ``max_iter``.
 
-    .. _Hyperband model selection algorithm: https://arxiv.org/abs/1603.06560
+    References
+    ----------
+    - Hyperband: A Novel Bandit-Based Approach to Hyperparameter Optimization, 2016.
+      Lisha Li, Kevin Jamieson, Giulia DeSalvo, Afshin Rostamizadeh, Ameet Talwalkar
+      https://arxiv.org/abs/1603.06560
+
     """
     def __init__(self, model, params, max_iter=81, eta=3,
-                 run_in_parallel=True, **kwargs):
+                 n_jobs=-1, **kwargs):
         """
         Parameters
         ----------
@@ -215,11 +220,11 @@ class Hyperband(DaskBaseSearchCV):
         eta : optional, int
             How aggressive to be while search. The default is 3, and theory
             suggests that ``eta=e=2.718...``. Changing this is not recommended.
-        run_in_parallel : bool, optional
+        n_jobs : int, optional
             Hyperband depends on another function, and they are completely
             indepdenent of one another and can be run embarassingly parallel.
-            This value (which defaults to True) controls whether these should
-            be submitted to the dask.distributed scheduler or not.
+            This function is submitted to the scheduler if ``n_jobs == -1``
+            (which is the default behavior).
         """
         self.params = params
         self.model = model
@@ -227,8 +232,15 @@ class Hyperband(DaskBaseSearchCV):
         self.eta = eta
         self.best_val_score = -np.inf
         self.n_iter = 0
-        self.run_in_parallel = run_in_parallel
 
+        if n_jobs not in {-1, 0}:
+            raise ValueError('n_jobs has to be either -1 or 0 to run in '
+                             'in parallel or serially respectively')
+        self._run_in_parallel = (n_jobs == -1)
+
+        if not hasattr(model, 'partial_fit'):
+            raise ValueError('Hyperband relies on partial_fit. Without it '
+                             'it would be no different than RandomizedSearchCV')
         if not hasattr(model, 'warm_start'):
             warnings.warn('model has no attribute warm_start. Hyperband will assume it '
                           'is reusing previous calls to `partial_fit` during each call '
@@ -236,9 +248,6 @@ class Hyperband(DaskBaseSearchCV):
         else:
             if not model.warm_start:
                 raise ValueError('Hyperband relies on model(..., warm_start=True).')
-        if not hasattr(model, 'partial_fit'):
-            raise ValueError('Hyperband relies on the partial_fit. Without it '
-                             'it would be no different than RandomizedSearchCV')
 
         self.history = []
 
@@ -301,7 +310,7 @@ class Hyperband(DaskBaseSearchCV):
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
                         'shared': shared, '_prefix': f's={s}'}]
 
-        if self.run_in_parallel:
+        if self._run_in_parallel:
             futures = [client.submit(_successive_halving, self.params,
                                      self.model, **kwarg, **fit_kwargs)
                        for kwarg in kwargs]
