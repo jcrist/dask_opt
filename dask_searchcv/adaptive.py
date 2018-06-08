@@ -82,16 +82,14 @@ def _random_choice(params, n=1):
 
 def _successive_halving(params, model, n=None, r=None, s=None,
                         shared=None, eta=3, _prefix='', dry_run=False,
-                        **fit_kwargs):
-    """
-    """
+                        n_jobs=-1, **fit_kwargs):
+    if any(x is None for x in [n, r, s, shared, model]):
+        raise ValueError('n, r, and s are required')
     client = _get_client()
+    data = client.get_dataset('_dask_hyperband_data')
 
-    data = client.get_dataset('_dask_data')
     best = {k: shared[k] for k in ['val_score', 'model', 'config']}
 
-    if any(x is None for x in [n, r, s]):
-        raise ValueError('n, r, and s are required')
     ids = [_prefix + '-' + str(i) for i in range(n)]
     params = _random_choice(params, n=len(ids))
     params = {k: param for k, param in zip(ids, params)}
@@ -111,6 +109,7 @@ def _successive_halving(params, model, n=None, r=None, s=None,
                'of bracket={s}')
         logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
+        print(msg.format(n=n_i, r=r_i, i=i, s=s))
         futures = {k: client.submit(_train, model, *data['train'], *data['val'],
                                     max_iter=r_i, s=s, i=i,
                                     k=k, dry_run=dry_run,
@@ -122,8 +121,9 @@ def _successive_halving(params, model, n=None, r=None, s=None,
         times += [{'id': k, **r[1]} for k, r in results.items()]
 
         final_val_scores.update(val_scores)
-        history += [{'s': s, 'i': i, 'val_score': val_scores[k], 'model_id': k,
-                     'iters': iters, 'num_models': len(val_scores), **params[k]}
+        history += [{'bracket': s, 'bracket_iter': i, 'val_score': val_scores[k],
+                     'model_id': k, 'partial_fit_iters': iters,
+                     'num_models': len(val_scores), **params[k]}
                      for k, model, in models.items()]
 
         models = _top_k(models, val_scores, k=max(1, math.floor(n_i / eta)))
@@ -224,7 +224,8 @@ class Hyperband(DaskBaseSearchCV):
             Hyperband depends on another function, and they are completely
             indepdenent of one another and can be run embarassingly parallel.
             This function is submitted to the scheduler if ``n_jobs == -1``
-            (which is the default behavior).
+            (which is the default behavior). Setting ``n_jobs == 0`` can help
+            preserve memory on your machine.
         """
         self.params = params
         self.model = model
@@ -234,9 +235,8 @@ class Hyperband(DaskBaseSearchCV):
         self.n_iter = 0
 
         if n_jobs not in {-1, 0}:
-            raise ValueError('n_jobs has to be either -1 or 0 to run in '
-                             'in parallel or serially respectively')
-        self._run_in_parallel = (n_jobs == -1)
+            raise ValueError('n_jobs must be either -1 or 0')
+        self.n_jobs = n_jobs
 
         if not hasattr(model, 'partial_fit'):
             raise ValueError('Hyperband relies on partial_fit. Without it '
@@ -288,8 +288,8 @@ class Hyperband(DaskBaseSearchCV):
             shared[key] = distributed.Variable(key)
             shared[key].set(value)
 
-        if '_dask_data' in client.list_datasets():
-            client.unpublish_dataset('_dask_data')
+        if '_dask_hyperband_data' in client.list_datasets():
+            client.unpublish_dataset('_dask_hyperband_data')
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
         data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
@@ -297,7 +297,7 @@ class Hyperband(DaskBaseSearchCV):
         for key in data.keys():
             data[key][0] = client.scatter(data[key][0])
             data[key][1] = client.scatter(data[key][1])
-        client.publish_dataset(_dask_data=data)
+        client.publish_dataset(_dask_hyperband_data=data)
 
         # now start hyperband
         R, eta = self.R, self.eta
@@ -308,17 +308,15 @@ class Hyperband(DaskBaseSearchCV):
             n = math.ceil(B/R * eta**s / (s+1))
             r = R * eta ** -s
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
-                        'shared': shared, '_prefix': f's={s}'}]
+                        'shared': shared, '_prefix': f's={s}', 'n_jobs': self.n_jobs}]
 
-        if self._run_in_parallel:
-            futures = [client.submit(_successive_halving, self.params,
-                                     self.model, **kwarg, **fit_kwargs)
-                       for kwarg in kwargs]
+        if self.n_jobs == -1:
+            futures = [client.submit(_successive_halving, self.params, self.model,
+                                     **kwarg, **fit_kwargs) for kwarg in kwargs]
             results = client.gather(futures)
-        else:
+        elif self.n_jobs == 0:
             results = [_successive_halving(self.params, self.model, **kwarg,
-                                           **fit_kwargs)
-                       for kwarg in kwargs]
+                                           **fit_kwargs) for kwarg in kwargs]
 
         all_keys = reduce(lambda x, y: x + y, [list(r['params'].keys()) for r in results])
 
@@ -374,7 +372,7 @@ class Hyperband(DaskBaseSearchCV):
         self.fit(X, y, dry_run=True)
         df = pd.DataFrame(self.history)
 
-        brackets = df[['s', 'i', 'iters', 'num_models']]
+        brackets = df[['bracket', 'bracket_iter', 'partial_fit_iters', 'num_models']]
         values = {(s, i, iter, n) for _, (s, i, iter, n) in brackets.iterrows()}
         values = sorted(values)
         brackets = [{'bracket': v[0], 'bracket_iter': v[1],
@@ -382,7 +380,7 @@ class Hyperband(DaskBaseSearchCV):
                     for v in values]
 
         return {'num_models': len(df.model_id.unique()),
-                'num_partial_fit_calls': df.iters.sum(),
+                'num_partial_fit_calls': df.partial_fit_iters.sum(),
                 'num_cv_splits': 1,
                 'brackets': brackets}
 

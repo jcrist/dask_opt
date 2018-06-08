@@ -84,10 +84,11 @@ def test_hyperband_needs_partial_fit():
 def test_hyperband_n_jobs():
     client = _get_client()
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = Lasso()
-    params = {'none': None}
-    with pytest.raises(ValueError, match='n_jobs has to be either -1 or 0'):
-        alg = Hyperband(model, params, n_jobs=1)
+    model = TestFunction()
+    params = {'value': [1, 2, 3]}
+
+    with pytest.raises(ValueError, match='n_jobs must be'):
+        alg = Hyperband(model, params, max_iter=3, n_jobs=1)
 
 
 def test_info():
