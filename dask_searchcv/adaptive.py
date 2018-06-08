@@ -109,7 +109,6 @@ def _successive_halving(params, model, n=None, r=None, s=None,
                'of bracket={s}')
         logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
-        print(msg.format(n=n_i, r=r_i, i=i, s=s))
         futures = {k: client.submit(_train, model, *data['train'], *data['val'],
                                     max_iter=r_i, s=s, i=i,
                                     k=k, dry_run=dry_run,
@@ -134,7 +133,7 @@ def _successive_halving(params, model, n=None, r=None, s=None,
             best_['val_score'] = final_val_scores[max_loss_key]
             best_['config'] = params[max_loss_key]
             [best[k].set(v) for k, v in best_.items()]
-            #  logger.info("New best val_score={} found".format(best_['val_score']))
+            logger.info("New best val_score={} found".format(best_['val_score']))
 
         if len(models) == 1:
             break
