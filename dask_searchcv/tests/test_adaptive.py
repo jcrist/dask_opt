@@ -78,7 +78,7 @@ def test_hyperband_needs_partial_fit():
     model = Lasso()
     params = {'none': None}
     with pytest.raises(ValueError, match='Hyperband relies on partial_fit'):
-        alg = Hyperband(model, params, max_iter=81)
+        alg = Hyperband(model, params, max_iter=81, n_jobs=0)
 
 
 def test_hyperband_n_jobs():
