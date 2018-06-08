@@ -173,6 +173,7 @@ def test_top_k(k=2):
 def _get_client():
     try:
         client = distributed.get_client()
+        client.restart()
     except ValueError:
         client = Client()
     return client

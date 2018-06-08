@@ -253,7 +253,7 @@ class Hyperband(DaskBaseSearchCV):
 
         super_default = dict(scoring=None, iid=True, refit=True, cv=None,
                              error_score='raise', return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
-                             scheduler=None, n_jobs=-1, cache_cv=True)
+                             scheduler=None, cache_cv=True)
         for k, v in super_default.items():
             if k in kwargs and kwargs[k] != super_default[k]:
                 warnings.warn('Hyperband ignores the keyword argument {k}.')
