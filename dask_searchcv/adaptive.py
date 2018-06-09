@@ -44,20 +44,34 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
 
     """
     start_time = default_timer()
+
+    if hasattr(X, 'result'):
+        X = X.result()
+    if hasattr(y, 'result'):
+        y = y.result()
+    if hasattr(X_val, 'result'):
+        X_val = X_val.result()
+    if hasattr(y_val, 'result'):
+        y_val = y_val.result()
+
     for iter in range(int(max_iter)):
         msg = ("Training model {k} in bracket s={s} iteration {i}. "
                "This model is {percent:.1f}% trained for this bracket")
         logger.info(msg.format(iter=iter, k=k, s=s, i=i,
                                percent=iter * 100.0 / max_iter))
         if not dry_run:
+            print([type(x) for x in [X, y]], fit_kwargs)
             _ = model.partial_fit(X, y, **fit_kwargs)
     fit_time = default_timer() - start_time
     msg = ("Training model {k} for {max_iter} partial_fit calls took {secs} seconds")
     logger.info(msg.format(k=k, max_iter=max_iter, secs=fit_time))
 
     start_time = default_timer()
+    #  score = model.score(X_val, y_val) if not dry_run else np.random.rand()
     score = model.score(X_val, y_val) if not dry_run else np.random.rand()
     score_time = default_timer() - start_time
+    msg = "Fitting model {k} took {fit} seconds and scoring took {score} seconds"
+    logger.info(msg.format(k=k, fit=fit_time, score=score_time))
     return score, {'score_time': score_time, 'fit_time': fit_time}
 
 
@@ -109,12 +123,16 @@ def _successive_halving(params, model, n=None, r=None, s=None,
                'of bracket={s}')
         logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
-        futures = {k: client.submit(_train, model, *data['train'], *data['val'],
-                                    max_iter=r_i, s=s, i=i,
-                                    k=k, dry_run=dry_run,
-                                    **fit_kwargs)
-                      for k, model in models.items()}
-        results = client.gather(futures)
+        results = {k: _train(model, *data['train'], *data['val'],
+                             max_iter=r_i, s=s, i=i, k=k, dry_run=dry_run,
+                             **fit_kwargs)
+                   for k, model in models.items()}
+        #  futures = {k: client.submit(_train, model, *data['train'], *data['val'],
+                                    #  max_iter=r_i, s=s, i=i,
+                                    #  k=k, dry_run=dry_run,
+                                    #  **fit_kwargs)
+                      #  for k, model in models.items()}
+        #  results = client.gather(futures)
 
         val_scores = {k: r[0] for k, r in results.items()}
         times += [{'id': k, **r[1]} for k, r in results.items()]
@@ -309,6 +327,7 @@ class Hyperband(DaskBaseSearchCV):
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
                         'shared': shared, '_prefix': f's={s}', 'n_jobs': self.n_jobs}]
 
+        #  self.n_jobs = 0
         if self.n_jobs == -1:
             futures = [client.submit(_successive_halving, self.params, self.model,
                                      **kwarg, **fit_kwargs) for kwarg in kwargs]
@@ -316,6 +335,8 @@ class Hyperband(DaskBaseSearchCV):
         elif self.n_jobs == 0:
             results = [_successive_halving(self.params, self.model, **kwarg,
                                            **fit_kwargs) for kwarg in kwargs]
+        else:
+            raise ValueError('n_jobs not recognized to be 0 or 1')
 
         all_keys = reduce(lambda x, y: x + y, [list(r['params'].keys()) for r in results])
 

@@ -1,5 +1,5 @@
 from dask_searchcv.adaptive import _top_k, Hyperband
-from dask_ml.linear_model import PartialSGDClassifier
+from sklearn.linear_model import SGDClassifier
 from dask_ml.datasets import make_classification
 import numpy as np
 import dask.array as da
@@ -11,9 +11,12 @@ from pprint import pprint
 import scipy.stats as stats
 import random
 from sklearn.linear_model import Lasso
+from distributed.utils_test import cluster, loop, gen_cluster
+import time
+from dask_ml.wrappers import Incremental
 
 
-class TestFunction:
+class ConstantFunction:
     def _fn(self):
         return self.value
 
@@ -32,29 +35,48 @@ class TestFunction:
         return self._fn()
 
 
+def _get_client():
+    try:
+        return distributed.get_client()
+    except:
+        return Client()
+
+def _with_client(fn):
+    def fn_with_client(loop, *args, **kwargs):
+        #  client = _get_client()
+        #  return fn(*args, **kwargs)
+        with cluster() as (s, [a, b]):
+            with Client(s['address'], loop=loop) as client:
+                y = fn(*args, **kwargs)
+        return y
+    return fn_with_client
+
+
+from dask_ml.metrics import accuracy_score
+@_with_client
 def test_hyperband_sklearn():
-    client = _get_client()
     X, y = make_classification(n_samples=1000, chunks=500)
-    classes = da.unique(y)
-    model = PartialSGDClassifier(warm_start=True, classes=classes,
-                                 loss='hinge', penalty='elasticnet')
+    classes = np.unique(y).tolist()
+    model = Incremental(SGDClassifier(), scoring=accuracy_score,
+                        warm_start=True, loss='hinge', penalty='elasticnet')
 
     params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
               'l1_ratio': np.linspace(0, 1, num=int(10e3))}
     alg = Hyperband(model, params, max_iter=9, n_jobs=0)
 
-    alg.fit(X, y, dry_run=True)
+    alg.fit(X, y, dry_run=True, classes=classes)
     assert len(alg.history) == 20
     alg.fit(X, y, dry_run=True)
     assert len(alg.history) == 40
 
-    alg.fit(X, y, classes=classes)  # make sure no exceptions are raised
+    alg.fit(X, y, classes=classes)
 
 
-def test_hyperband_test_model():
-    client = _get_client()
+@_with_client
+def test_hyperband_test_model(*args, **kwargs):
+    print(args, kwargs)
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = TestFunction()
+    model = ConstantFunction()
     max_iter = 81
 
     values = np.random.RandomState(42).rand(int(max_iter))
@@ -66,14 +88,14 @@ def test_hyperband_test_model():
 
     df = pd.DataFrame(alg.cv_results_)
     assert set(df.param_value) == set(values)
-    assert (df.test_score == df.param_value).all()  # more of a TestFunction test
+    assert (df.test_score == df.param_value).all()  # more of a ConstantFunction test
     assert alg.best_params_['value'] == alg.best_estimator_.value
     assert alg.best_params_['value'] == values.max()
     assert alg.cv_results_['test_score'][alg.best_index_] == values.max()
 
 
+@_with_client
 def test_hyperband_needs_partial_fit():
-    client = _get_client()
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
     model = Lasso()
     params = {'none': None}
@@ -81,21 +103,21 @@ def test_hyperband_needs_partial_fit():
         alg = Hyperband(model, params, max_iter=81, n_jobs=0)
 
 
+@_with_client
 def test_hyperband_n_jobs():
-    client = _get_client()
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = TestFunction()
+    model = ConstantFunction()
     params = {'value': [1, 2, 3]}
 
     with pytest.raises(ValueError, match='n_jobs must be'):
         alg = Hyperband(model, params, max_iter=3, n_jobs=1)
 
 
+@_with_client
 def test_info():
-    client = _get_client()
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
 
-    model = TestFunction()
+    model = ConstantFunction()
     max_iter = 9
 
     values = np.random.RandomState(42).rand(int(max_iter))
@@ -131,10 +153,10 @@ def test_info():
     assert expect['num_cv_splits'] == 1  # TODO: change this!
 
 
+@_with_client
 def test_hyperband_with_distributions():
-    client = _get_client()
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = TestFunction()
+    model = ConstantFunction()
     max_iter = 81
 
     values = stats.uniform(0, 1)
@@ -149,12 +171,9 @@ def test_hyperband_with_distributions():
 
 
 def test_hyperband_needs_client():
-    # make sure there's no client active
-    client = _get_client()
-    client.close()
-
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = PartialSGDClassifier(classes=da.unique(y), warm_start=True)
+    #  model = PartialSGDClassifier(classes=da.unique(y), warm_start=True)
+    model = Incremental(SGDClassifier(), warm_start=True)
     params = {'value': np.logspace(-3, 0, num=100)}
 
     alg = Hyperband(model, params, max_iter=81, n_jobs=0)
@@ -168,12 +187,3 @@ def test_top_k(k=2):
     models = {str(i): str(i) for i in keys}
     y = _top_k(models, scores, k=k)
     assert y == {str(i): str(i) for i in range(k)}
-
-
-def _get_client():
-    try:
-        client = distributed.get_client()
-        client.restart()
-    except ValueError:
-        client = Client()
-    return client
