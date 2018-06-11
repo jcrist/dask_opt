@@ -114,7 +114,7 @@ def _successive_halving(params, model, n=None, r=None, s=None,
     for k, param in params.items():
         models[k] = clone(model).set_params(**param)
 
-    parallel = joblib.Parallel()
+    parallel = joblib.Parallel(n_jobs=n_jobs)
     fn = joblib.delayed(_train)
 
     history = []
@@ -129,9 +129,10 @@ def _successive_halving(params, model, n=None, r=None, s=None,
         logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
         keys = list(models.keys())
-        results = parallel(fn(models[k], *data['train'], *data['val'],
-                          max_iter=r_i, s=s, i=i, k=k, dry_run=dry_run,
-                          **fit_kwargs) for k in keys)
+        with joblib.parallel_backend('dask') as (ba, _):
+            results = parallel(fn(models[k], *data['train'], *data['val'],
+                               max_iter=r_i, s=s, i=i, k=k, dry_run=dry_run,
+                               **fit_kwargs) for k in keys)
         results = {k: v for k, v in zip(keys, results)}
 
         val_scores = {k: r[0] for k, r in results.items()}
@@ -141,7 +142,7 @@ def _successive_halving(params, model, n=None, r=None, s=None,
         history += [{'bracket': s, 'bracket_iter': i, 'val_score': val_scores[k],
                      'model_id': k, 'partial_fit_iters': iters,
                      'num_models': len(val_scores), **params[k]}
-                     for k, model, in models.items()]
+                    for k, model, in models.items()]
 
         models = _top_k(models, val_scores, k=max(1, math.floor(n_i / eta)))
 
@@ -322,15 +323,16 @@ class Hyperband(DaskBaseSearchCV):
         s_max = math.floor(math.log(self.R, self.eta))
         B = (s_max + 1) * self.R
         kwargs = []
+        worker_n_jobs = -1 if self.n_jobs == -1 else (self.n_jobs // s_max) + 1
         for s in reversed(range(s_max + 1)):
             n = math.ceil(B/R * eta**s / (s+1))
             r = R * eta ** -s
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
-                        'shared': shared, '_prefix': f's={s}', 'n_jobs': self.n_jobs}]
+                        '_prefix': f's={s}', 'shared': shared,
+                        'n_jobs': worker_n_jobs}]
 
-        Parallel = joblib.Parallel
         delayed = joblib.delayed
-        parallel = Parallel()
+        parallel = joblib.Parallel(n_jobs=1)
         fn = delayed(_successive_halving)
         with joblib.parallel_backend('dask') as (ba, _):
             results = parallel(fn(self.params, self.model, **kwarg, **fit_kwargs)

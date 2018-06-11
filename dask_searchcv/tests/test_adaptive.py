@@ -41,6 +41,7 @@ def _get_client():
     except:
         return Client()
 
+
 def _with_client(fn):
     def fn_with_client(loop, *args, **kwargs):
         #  client = _get_client()
@@ -50,25 +51,6 @@ def _with_client(fn):
                 y = fn(*args, **kwargs)
         return y
     return fn_with_client
-
-
-@_with_client
-def test_hyperband_sklearn():
-    X, y = make_classification(n_samples=1000, chunks=500)
-    classes = np.unique(y).tolist()
-    model = Incremental(SGDClassifier(),
-                        warm_start=True, loss='hinge', penalty='elasticnet')
-
-    params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
-              'l1_ratio': np.linspace(0, 1, num=int(10e3))}
-    alg = Hyperband(model, params, max_iter=9, n_jobs=0)
-
-    alg.fit(X, y, dry_run=True, classes=classes)
-    assert len(alg.history) == 20
-    alg.fit(X, y, dry_run=True)
-    assert len(alg.history) == 40
-
-    alg.fit(X, y, classes=classes)
 
 
 @_with_client
@@ -170,7 +152,6 @@ def test_hyperband_with_distributions():
 
 def test_hyperband_needs_client():
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    #  model = PartialSGDClassifier(classes=da.unique(y), warm_start=True)
     model = Incremental(SGDClassifier(), warm_start=True)
     params = {'value': np.logspace(-3, 0, num=100)}
 
@@ -185,3 +166,22 @@ def test_top_k(k=2):
     models = {str(i): str(i) for i in keys}
     y = _top_k(models, scores, k=k)
     assert y == {str(i): str(i) for i in range(k)}
+
+
+@_with_client
+def test_hyperband_sklearn():
+    X, y = make_classification(n_samples=1000, chunks=500)
+    classes = np.unique(y).tolist()
+    model = Incremental(SGDClassifier(),
+                        warm_start=True, loss='hinge', penalty='elasticnet')
+
+    params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
+              'l1_ratio': np.linspace(0, 1, num=int(10e3))}
+    alg = Hyperband(model, params, max_iter=9, n_jobs=0)
+
+    alg.fit(X, y, dry_run=True, classes=classes)
+    assert len(alg.history) == 20
+    alg.fit(X, y, dry_run=True)
+    assert len(alg.history) == 40
+
+    alg.fit(X, y, classes=classes)
