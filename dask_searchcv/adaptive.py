@@ -7,6 +7,7 @@ import toolz
 import warnings
 from timeit import default_timer
 import logging
+import joblib
 
 import sklearn
 from dask_ml.model_selection._split import train_test_split
@@ -112,6 +113,9 @@ def _successive_halving(params, model, n=None, r=None, s=None,
     for k, param in params.items():
         models[k] = clone(model).set_params(**param)
 
+    parallel = joblib.Parallel()
+    fn = joblib.delayed(_train)
+
     history = []
     iters = 0
     times = []
@@ -123,16 +127,11 @@ def _successive_halving(params, model, n=None, r=None, s=None,
                'of bracket={s}')
         logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
-        results = {k: _train(model, *data['train'], *data['val'],
-                             max_iter=r_i, s=s, i=i, k=k, dry_run=dry_run,
-                             **fit_kwargs)
-                   for k, model in models.items()}
-        #  futures = {k: client.submit(_train, model, *data['train'], *data['val'],
-                                    #  max_iter=r_i, s=s, i=i,
-                                    #  k=k, dry_run=dry_run,
-                                    #  **fit_kwargs)
-                      #  for k, model in models.items()}
-        #  results = client.gather(futures)
+        keys = list(models.keys())
+        results = parallel(fn(models[k], *data['train'], *data['val'],
+                          max_iter=r_i, s=s, i=i, k=k, dry_run=dry_run,
+                          **fit_kwargs) for k in keys)
+        results = {k: v for k, v in zip(keys, results)}
 
         val_scores = {k: r[0] for k, r in results.items()}
         times += [{'id': k, **r[1]} for k, r in results.items()]
@@ -327,16 +326,13 @@ class Hyperband(DaskBaseSearchCV):
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
                         'shared': shared, '_prefix': f's={s}', 'n_jobs': self.n_jobs}]
 
-        #  self.n_jobs = 0
-        if self.n_jobs == -1:
-            futures = [client.submit(_successive_halving, self.params, self.model,
-                                     **kwarg, **fit_kwargs) for kwarg in kwargs]
-            results = client.gather(futures)
-        elif self.n_jobs == 0:
-            results = [_successive_halving(self.params, self.model, **kwarg,
-                                           **fit_kwargs) for kwarg in kwargs]
-        else:
-            raise ValueError('n_jobs not recognized to be 0 or 1')
+        Parallel = joblib.Parallel
+        delayed = joblib.delayed
+        parallel = Parallel()
+        fn = delayed(_successive_halving)
+        with joblib.parallel_backend('dask') as (ba, _):
+            results = parallel(fn(self.params, self.model, **kwarg, **fit_kwargs)
+                               for kwarg in kwargs)
 
         all_keys = reduce(lambda x, y: x + y, [list(r['params'].keys()) for r in results])
 
@@ -352,7 +348,6 @@ class Hyperband(DaskBaseSearchCV):
         cv_results_, best_idx = _get_cv_results(params=params, val_scores=val_scores,
                                                 times=times)
 
-        #  self.best_params_ = cv_results_[best_idx]['params']
         self.best_index_ = best_idx
         self.history += history
         self.best_estimator_ = _get_best_model(val_scores, models)
