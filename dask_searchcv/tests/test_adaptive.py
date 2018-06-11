@@ -11,7 +11,7 @@ from pprint import pprint
 import scipy.stats as stats
 import random
 from sklearn.linear_model import Lasso
-from distributed.utils_test import cluster, loop, gen_cluster
+from distributed.utils_test import cluster, loop
 import time
 from dask_ml.wrappers import Incremental
 
@@ -38,16 +38,14 @@ class ConstantFunction:
 def _get_client():
     try:
         return distributed.get_client()
-    except:
+    except ValueError:
         return Client()
 
 
 def _with_client(fn):
     def fn_with_client(loop, *args, **kwargs):
-        #  client = _get_client()
-        #  return fn(*args, **kwargs)
         with cluster() as (s, [a, b]):
-            with Client(s['address'], loop=loop) as client:
+            with Client(s['address'], loop=loop):
                 y = fn(*args, **kwargs)
         return y
     return fn_with_client
@@ -80,7 +78,7 @@ def test_hyperband_needs_partial_fit():
     model = Lasso()
     params = {'none': None}
     with pytest.raises(ValueError, match='Hyperband relies on partial_fit'):
-        alg = Hyperband(model, params, max_iter=81, n_jobs=0)
+        Hyperband(model, params, max_iter=81, n_jobs=0)
 
 
 @_with_client
@@ -89,8 +87,9 @@ def test_hyperband_n_jobs():
     model = ConstantFunction()
     params = {'value': [1, 2, 3]}
 
-    with pytest.raises(ValueError, match='n_jobs must be'):
+    with pytest.warns(UserWarning, match='model has no attribute warm_start'):
         alg = Hyperband(model, params, max_iter=3, n_jobs=1)
+    alg.fit(X, y)
 
 
 @_with_client
@@ -170,6 +169,8 @@ def test_top_k(k=2):
 
 @_with_client
 def test_hyperband_sklearn():
+    # This test passes very incosistently, and often throws "RuntimeError:
+    # IOLoop is closed". I rerun this by itself until it passes
     X, y = make_classification(n_samples=1000, chunks=500)
     classes = np.unique(y).tolist()
     model = Incremental(SGDClassifier(),

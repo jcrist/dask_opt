@@ -7,7 +7,9 @@ import toolz
 import warnings
 from timeit import default_timer
 import logging
+import distributed.joblib
 import joblib
+from distutils.version import LooseVersion
 
 import sklearn
 from dask_ml.model_selection._split import train_test_split
@@ -63,7 +65,7 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
         logger.info(msg.format(iter=iter, k=k, s=s, i=i,
                                percent=iter * 100.0 / max_iter))
         if not dry_run:
-            _ = model.partial_fit(X, y, **fit_kwargs)
+            model.partial_fit(X, y, **fit_kwargs)
     fit_time = default_timer() - start_time
     msg = ("Training model {k} for {max_iter} partial_fit calls took {secs} seconds")
     logger.info(msg.format(k=k, max_iter=max_iter, secs=fit_time))
@@ -221,8 +223,7 @@ class Hyperband(DaskBaseSearchCV):
       https://arxiv.org/abs/1603.06560
 
     """
-    def __init__(self, model, params, max_iter=81, eta=3,
-                 n_jobs=-1, **kwargs):
+    def __init__(self, model, params, max_iter=81, eta=3, n_jobs=-1, **kwargs):
         """
         Parameters
         ----------
@@ -233,8 +234,6 @@ class Hyperband(DaskBaseSearchCV):
         max_iter : int
             The maximum number of iterations to train a model on, as determined
             by ``model.partial_fit``.
-        X, y : np.ndarray, np.ndarray
-            Train data, features ``X`` and labels ``y``.
         eta : optional, int
             How aggressive to be while search. The default is 3, and theory
             suggests that ``eta=e=2.718...``. Changing this is not recommended.
@@ -252,8 +251,6 @@ class Hyperband(DaskBaseSearchCV):
         self.best_val_score = -np.inf
         self.n_iter = 0
 
-        if n_jobs not in {-1, 0}:
-            raise ValueError('n_jobs must be either -1 or 0')
         self.n_jobs = n_jobs
 
         est = model if not isinstance(model, ParallelPostFit) else model.estimator
@@ -267,11 +264,14 @@ class Hyperband(DaskBaseSearchCV):
         else:
             if not est.warm_start:
                 raise ValueError('Hyperband relies on model(..., warm_start=True).')
+        if LooseVersion(joblib.__version__) <= "0.11.0":
+            raise ModuleNotFoundError("joblib >= 0.11.1 required for HyperBand.")
 
         self.history = []
 
         super_default = dict(scoring=None, iid=True, refit=True, cv=None,
-                             error_score='raise', return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
+                             error_score='raise',
+                             return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
                              scheduler=None, cache_cv=True)
         for k, v in super_default.items():
             if k in kwargs and kwargs[k] != super_default[k]:
@@ -325,7 +325,7 @@ class Hyperband(DaskBaseSearchCV):
         kwargs = []
         worker_n_jobs = -1 if self.n_jobs == -1 else (self.n_jobs // s_max) + 1
         for s in reversed(range(s_max + 1)):
-            n = math.ceil(B/R * eta**s / (s+1))
+            n = math.ceil((B / R) * eta**s / (s + 1))
             r = R * eta ** -s
             kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
                         '_prefix': f's={s}', 'shared': shared,
@@ -372,7 +372,8 @@ class Hyperband(DaskBaseSearchCV):
             * num_partial_fit_calls : total number of times partial_fit is called
             * num_models : the total number of models evaluated
             * num_cv_splits : number of cross validation splits
-            * brackets : a list of dicts, importable into pandas.DataFrame. Each value has a key of
+            * brackets : a list of dicts, importable into pandas.DataFrame.
+              Each value has a key of
                 * bracket : the Hyperband bracket number. It runs several
                   brackets to balance the explore/exploit tradeoff (should you
                   train many models for few iterations or few models for many
