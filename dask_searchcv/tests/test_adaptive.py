@@ -52,12 +52,11 @@ def _with_client(fn):
     return fn_with_client
 
 
-from dask_ml.metrics import accuracy_score
 @_with_client
 def test_hyperband_sklearn():
     X, y = make_classification(n_samples=1000, chunks=500)
     classes = np.unique(y).tolist()
-    model = Incremental(SGDClassifier(), scoring=accuracy_score,
+    model = Incremental(SGDClassifier(),
                         warm_start=True, loss='hinge', penalty='elasticnet')
 
     params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
@@ -74,7 +73,6 @@ def test_hyperband_sklearn():
 
 @_with_client
 def test_hyperband_test_model(*args, **kwargs):
-    print(args, kwargs)
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
     model = ConstantFunction()
     max_iter = 81

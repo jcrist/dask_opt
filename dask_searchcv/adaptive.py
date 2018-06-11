@@ -11,9 +11,11 @@ import joblib
 
 import sklearn
 from dask_ml.model_selection._split import train_test_split
+from dask_ml.wrappers import ParallelPostFit
 
 from sklearn import clone
 from sklearn.model_selection import ParameterSampler
+from dask_ml.wrappers import Incremental
 
 import dask.array as da
 from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
@@ -61,7 +63,6 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
         logger.info(msg.format(iter=iter, k=k, s=s, i=i,
                                percent=iter * 100.0 / max_iter))
         if not dry_run:
-            print([type(x) for x in [X, y]], fit_kwargs)
             _ = model.partial_fit(X, y, **fit_kwargs)
     fit_time = default_timer() - start_time
     msg = ("Training model {k} for {max_iter} partial_fit calls took {secs} seconds")
@@ -254,15 +255,16 @@ class Hyperband(DaskBaseSearchCV):
             raise ValueError('n_jobs must be either -1 or 0')
         self.n_jobs = n_jobs
 
-        if not hasattr(model, 'partial_fit'):
+        est = model if not isinstance(model, ParallelPostFit) else model.estimator
+        if not hasattr(est, 'partial_fit'):
             raise ValueError('Hyperband relies on partial_fit. Without it '
                              'it would be no different than RandomizedSearchCV')
-        if not hasattr(model, 'warm_start'):
+        if not hasattr(est, 'warm_start'):
             warnings.warn('model has no attribute warm_start. Hyperband will assume it '
                           'is reusing previous calls to `partial_fit` during each call '
                           'to `partial_fit`')
         else:
-            if not model.warm_start:
+            if not est.warm_start:
                 raise ValueError('Hyperband relies on model(..., warm_start=True).')
 
         self.history = []
