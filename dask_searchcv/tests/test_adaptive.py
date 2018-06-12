@@ -92,20 +92,6 @@ def test_hyperband_n_jobs():
 
 
 @_with_client
-def test_hyperband_async():
-    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = ConstantFunction()
-    params = {'value': stats.uniform(0, 1)}
-
-    alg = Hyperband(model, params, max_iter=3, n_jobs=-1)
-    future = alg.fit(X, y)
-
-
-    result = yield future
-
-
-
-@_with_client
 def test_info():
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
 

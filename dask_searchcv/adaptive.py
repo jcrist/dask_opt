@@ -33,13 +33,19 @@ def _train(model, data, max_iter=1, dry_run=False,
     s, i, k : int or string, used for logging
     fit_kwargs : dict, kwargs to pass to partial_fit
 
-    Takes max_iters as parameters. THese are treated as a "scarce resource" --
+    Takes max_iters as parameters, which are treated as a "scarce resource" --
     Hyperband is trying to minimize the total iters use for max_iters.
 
     Returns
     -------
     val_score : float. Validation score
     times : dict. keys of ``fit_time`` and ``score_time``, values in seconds.
+
+    Choices
+    -------
+    1. Integrate with dask-searchcv's DaskBaseSearchCV
+    2. PR for sklearn's cross_val_score to have fit kwarg
+    3. Copy and cross_val_score here
 
     """
     for k, v in data.items():
@@ -95,6 +101,7 @@ def rec_type(d):
     if isinstance(d, dict):
         return {k: rec_type(v) for k, v in d.items()}
     return type(d)
+
 
 def _successive_halving(params, model, data, n=None, r=None, s=None,
                         shared=None, eta=3, _prefix='', dry_run=False,
@@ -325,10 +332,15 @@ class Hyperband(DaskBaseSearchCV):
             all_kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run,
                             'eta': eta, '_prefix': f's={s}', 'shared': shared}]
 
-        futures = [dask.delayed(_successive_halving)(self.params, self.model,
-                                                     data, **kwargs, **fit_kwargs)
-                   for kwargs in all_kwargs]
-        results = [f.compute() for f in futures]
+        if self.n_jobs == -1:
+            futures = [dask.delayed(_successive_halving)(self.params, self.model,
+                                                         data, **kwargs, **fit_kwargs)
+                       for kwargs in all_kwargs]
+            results = [f.compute() for f in futures]
+        else:
+            results = [_successive_halving(self.params, self.model, data,
+                                           **kwargs, **fit_kwargs)
+                       for kwargs in all_kwargs]
 
         all_keys = [key for r in results for key in r['params'].keys()]
         history = sum([r['history'] for r in results], [])
