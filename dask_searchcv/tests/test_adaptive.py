@@ -77,8 +77,8 @@ def test_hyperband_needs_partial_fit():
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
     model = Lasso()
     params = {'none': None}
-    with pytest.raises(ValueError, match='Hyperband relies on partial_fit'):
-        Hyperband(model, params, max_iter=81, n_jobs=0)
+    with pytest.raises(ValueError, match='Hyperband only supports models with partial_fit'):
+        Hyperband(model, params)
 
 
 @_with_client
@@ -87,9 +87,22 @@ def test_hyperband_n_jobs():
     model = ConstantFunction()
     params = {'value': [1, 2, 3]}
 
-    with pytest.warns(UserWarning, match='model has no attribute warm_start'):
+    with pytest.raises(ValueError, match='n_jobs must be'):
         alg = Hyperband(model, params, max_iter=3, n_jobs=1)
-    alg.fit(X, y)
+
+
+@_with_client
+def test_hyperband_async():
+    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+    model = ConstantFunction()
+    params = {'value': stats.uniform(0, 1)}
+
+    alg = Hyperband(model, params, max_iter=3, n_jobs=-1)
+    future = alg.fit(X, y)
+
+
+    result = yield future
+
 
 
 @_with_client
@@ -155,8 +168,9 @@ def test_hyperband_needs_client():
     params = {'value': np.logspace(-3, 0, num=100)}
 
     alg = Hyperband(model, params, max_iter=81, n_jobs=0)
-    with pytest.raises(ValueError, match='No global distributed client found'):
-        alg.fit(X, y)
+    with pytest.raises(ValueError, match='No global client'):
+        with pytest.warns(UserWarning, match='No global distributed client found'):
+            alg.fit(X, y)
 
 
 def test_top_k(k=2):

@@ -1,31 +1,25 @@
-import math
-import numpy as np
-import scipy.stats as stats
-from functools import partial
-from toolz import reduce
-import toolz
-import warnings
 from timeit import default_timer
 import logging
-import distributed.joblib
-import joblib
-from distutils.version import LooseVersion
+import warnings
+import math
 
-import sklearn
-from dask_ml.model_selection._split import train_test_split
-from dask_ml.wrappers import ParallelPostFit
-
+import numpy as np
 from sklearn import clone
 from sklearn.model_selection import ParameterSampler
-from dask_ml.wrappers import Incremental
-
+import dask
 import dask.array as da
+import toolz
+
+from dask_ml.model_selection._split import train_test_split
+from dask_ml.wrappers import ParallelPostFit
+import distributed
+
 from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
 logger = logging.getLogger(__name__)
 
 
-def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
+def _train(model, data, max_iter=1, dry_run=False,
            s=1, i=1, k='_', **fit_kwargs):
     """
     Train function. Returns validation score.
@@ -48,16 +42,13 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
     times : dict. keys of ``fit_time`` and ``score_time``, values in seconds.
 
     """
+    for k, v in data.items():
+        for i, vi in enumerate(v):
+            if isinstance(vi, np.ndarray):
+                data[k][i] = da.from_array(vi, chunks=10)
+    X, y = data['train']
+    X_val, y_val = data['val']
     start_time = default_timer()
-
-    if hasattr(X, 'result'):
-        X = X.result()
-    if hasattr(y, 'result'):
-        y = y.result()
-    if hasattr(X_val, 'result'):
-        X_val = X_val.result()
-    if hasattr(y_val, 'result'):
-        y_val = y_val.result()
 
     for iter in range(int(max_iter)):
         msg = ("Training model {k} in bracket s={s} iteration {i}. "
@@ -71,7 +62,6 @@ def _train(model, X, y, X_val, y_val, max_iter=1, dry_run=False,
     logger.info(msg.format(k=k, max_iter=max_iter, secs=fit_time))
 
     start_time = default_timer()
-    #  score = model.score(X_val, y_val) if not dry_run else np.random.rand()
     score = model.score(X_val, y_val) if not dry_run else np.random.rand()
     score_time = default_timer() - start_time
     msg = "Fitting model {k} took {fit} seconds and scoring took {score} seconds"
@@ -94,17 +84,23 @@ def _top_k(choose_from, eval_with, k=1):
 
 def _random_choice(params, n=1):
     configs = ParameterSampler(params, n)
-    return [{k: v if not isinstance(v, np.ndarray) else da.from_array(v)
-            for k, v in config.items()} for config in configs]
+    return configs
 
 
-def _successive_halving(params, model, n=None, r=None, s=None,
+def rec_type(d):
+    if isinstance(d, (float, int, str, np.ndarray, da.Array)):
+        return type(d)
+    if isinstance(d, list):
+        return [rec_type(di) for di in d]
+    if isinstance(d, dict):
+        return {k: rec_type(v) for k, v in d.items()}
+    return type(d)
+
+def _successive_halving(params, model, data, n=None, r=None, s=None,
                         shared=None, eta=3, _prefix='', dry_run=False,
-                        n_jobs=-1, **fit_kwargs):
+                        **fit_kwargs):
     if any(x is None for x in [n, r, s, shared, model]):
         raise ValueError('n, r, and s are required')
-    client = _get_client()
-    data = client.get_dataset('_dask_hyperband_data')
 
     best = {k: shared[k] for k in ['val_score', 'model', 'config']}
 
@@ -115,9 +111,6 @@ def _successive_halving(params, model, n=None, r=None, s=None,
     final_val_scores = {k: -np.inf for k in ids}
     for k, param in params.items():
         models[k] = clone(model).set_params(**param)
-
-    parallel = joblib.Parallel(n_jobs=n_jobs)
-    fn = joblib.delayed(_train)
 
     history = []
     iters = 0
@@ -130,12 +123,12 @@ def _successive_halving(params, model, n=None, r=None, s=None,
                'of bracket={s}')
         logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
 
-        keys = list(models.keys())
-        with joblib.parallel_backend('dask') as (ba, _):
-            results = parallel(fn(models[k], *data['train'], *data['val'],
-                               max_iter=r_i, s=s, i=i, k=k, dry_run=dry_run,
-                               **fit_kwargs) for k in keys)
-        results = {k: v for k, v in zip(keys, results)}
+        results = {k: dask.delayed(_train)(model, data, max_iter=r_i,
+                                           s=s, i=i, k=k, dry_run=dry_run,
+                                           **fit_kwargs)
+                   for k, model in models.items()}
+
+        results = {k: v.compute() for k, v in results.items()}
 
         val_scores = {k: r[0] for k, r in results.items()}
         times += [{'id': k, **r[1]} for k, r in results.items()]
@@ -160,8 +153,11 @@ def _successive_halving(params, model, n=None, r=None, s=None,
             break
 
     times = toolz.groupby('id', times)
-    times = {k: [toolz.keyfilter(lambda key: key != 'id', vi) for vi in v]
+    #  times1 = {k: [toolz.keyfilter(lambda key: key != 'id', vi) for vi in v]
+             #  for k, v in times.items()}
+    times = {k: [{k_: v_ for k_, v_ in vi.items() if k_ != 'id'} for vi in v]
              for k, v in times.items()}
+    #  assert times1 == times
     times = {k: toolz.merge_with(sum, v) for k, v in times.items()}
     return {'history': history, 'final_val_scores': final_val_scores,
             'params': params, 'models': models, 'times': times}
@@ -251,12 +247,18 @@ class Hyperband(DaskBaseSearchCV):
         self.best_val_score = -np.inf
         self.n_iter = 0
 
+        if n_jobs not in {-1, 0}:
+            raise ValueError('n_jobs must be -1 (for full parallelization with '
+                             'dask) or 0 (for regular list comphrension). '
+                             'Setting n_jobs=0 can help memory overhead.')
         self.n_jobs = n_jobs
 
         est = model if not isinstance(model, ParallelPostFit) else model.estimator
         if not hasattr(est, 'partial_fit'):
-            raise ValueError('Hyperband relies on partial_fit. Without it '
-                             'it would be no different than RandomizedSearchCV')
+            raise ValueError('Hyperband only supports models with partial_fit, '
+                             'which provides support for incremental learning. '
+                             'For non-incremental models, please consider '
+                             'RandomizedSearchCV instead')
         if not hasattr(est, 'warm_start'):
             warnings.warn('model has no attribute warm_start. Hyperband will assume it '
                           'is reusing previous calls to `partial_fit` during each call '
@@ -264,8 +266,7 @@ class Hyperband(DaskBaseSearchCV):
         else:
             if not est.warm_start:
                 raise ValueError('Hyperband relies on model(..., warm_start=True).')
-        if LooseVersion(joblib.__version__) <= "0.11.0":
-            raise ModuleNotFoundError("joblib >= 0.11.1 required for HyperBand.")
+
 
         self.history = []
 
@@ -297,18 +298,14 @@ class Hyperband(DaskBaseSearchCV):
           function comes down to having an function ``get_params(self)``.
 
         """
-        import distributed
         client = _get_client()
-
         variables = {'val_score': -np.inf, 'model': None, 'config': None,
                      'eta': self.eta, 'history': []}
         shared = {}
         for key, value in variables.items():
+            # distributed.Variable requires client
             shared[key] = distributed.Variable(key)
             shared[key].set(value)
-
-        if '_dask_hyperband_data' in client.list_datasets():
-            client.unpublish_dataset('_dask_hyperband_data')
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
         data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
@@ -316,30 +313,24 @@ class Hyperband(DaskBaseSearchCV):
         for key in data.keys():
             data[key][0] = client.scatter(data[key][0])
             data[key][1] = client.scatter(data[key][1])
-        client.publish_dataset(_dask_hyperband_data=data)
 
         # now start hyperband
         R, eta = self.R, self.eta
         s_max = math.floor(math.log(self.R, self.eta))
         B = (s_max + 1) * self.R
-        kwargs = []
-        worker_n_jobs = -1 if self.n_jobs == -1 else (self.n_jobs // s_max) + 1
+        all_kwargs = []
         for s in reversed(range(s_max + 1)):
             n = math.ceil((B / R) * eta**s / (s + 1))
             r = R * eta ** -s
-            kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run, 'eta': eta,
-                        '_prefix': f's={s}', 'shared': shared,
-                        'n_jobs': worker_n_jobs}]
+            all_kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run,
+                            'eta': eta, '_prefix': f's={s}', 'shared': shared}]
 
-        delayed = joblib.delayed
-        parallel = joblib.Parallel(n_jobs=1)
-        fn = delayed(_successive_halving)
-        with joblib.parallel_backend('dask') as (ba, _):
-            results = parallel(fn(self.params, self.model, **kwarg, **fit_kwargs)
-                               for kwarg in kwargs)
+        futures = [dask.delayed(_successive_halving)(self.params, self.model,
+                                                     data, **kwargs, **fit_kwargs)
+                   for kwargs in all_kwargs]
+        results = [f.compute() for f in futures]
 
-        all_keys = reduce(lambda x, y: x + y, [list(r['params'].keys()) for r in results])
-
+        all_keys = [key for r in results for key in r['params'].keys()]
         history = sum([r['history'] for r in results], [])
         models = toolz.merge([r['models'] for r in results])
         params = toolz.merge([r['params'] for r in results])
@@ -437,11 +428,11 @@ def _get_best_model(val_scores, models):
 
 
 def _get_client():
-    import distributed
     try:
         return distributed.get_client()
-    except ValueError:
-        raise ValueError('No global distributed client found with '
-                         'distributed.get_client. To resolve this error, '
-                         'have an distributed client: '
-                         'https://distributed.readthedocs.io/en/latest/client.html')
+    except ValueError as e:
+        warnings.warn('No global distributed client found with '
+                      'distributed.get_client. To resolve this error, '
+                      'have an distributed client: '
+                      'https://distributed.readthedocs.io/en/latest/client.html')
+        raise e
