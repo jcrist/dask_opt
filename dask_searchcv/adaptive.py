@@ -12,7 +12,6 @@ import toolz
 
 from dask_ml.model_selection._split import train_test_split
 from dask_ml.wrappers import ParallelPostFit
-import distributed
 
 from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
@@ -41,12 +40,6 @@ def _train(model, data, max_iter=1, dry_run=False,
     val_score : float. Validation score
     times : dict. keys of ``fit_time`` and ``score_time``, values in seconds.
 
-    Choices
-    -------
-    1. Integrate with dask-searchcv's DaskBaseSearchCV
-    2. PR for sklearn's cross_val_score to have fit kwarg
-    3. Copy and cross_val_score here
-
     """
     for k, v in data.items():
         for i, vi in enumerate(v):
@@ -57,15 +50,14 @@ def _train(model, data, max_iter=1, dry_run=False,
     start_time = default_timer()
 
     for iter in range(int(max_iter)):
-        msg = ("Training model {k} in bracket s={s} iteration {i}. "
-               "This model is {percent:.1f}% trained for this bracket")
-        logger.info(msg.format(iter=iter, k=k, s=s, i=i,
-                               percent=iter * 100.0 / max_iter))
+        msg = ("Training model %d in bracket %d iteration %d. "
+               "This model is %0.2f trained for this bracket")
+        logger.info(msg, k, s, i, percent=iter * 100.0 / max_iter)
         if not dry_run:
             model.partial_fit(X, y, **fit_kwargs)
     fit_time = default_timer() - start_time
-    msg = ("Training model {k} for {max_iter} partial_fit calls took {secs} seconds")
-    logger.info(msg.format(k=k, max_iter=max_iter, secs=fit_time))
+    msg = ("Training model %s for %d partial_fit calls took %0.2f seconds")
+    logger.info(msg, k, max_iter, fit_time)
 
     start_time = default_timer()
     score = model.score(X_val, y_val) if not dry_run else np.random.rand()
@@ -104,12 +96,11 @@ def rec_type(d):
 
 
 def _successive_halving(params, model, data, n=None, r=None, s=None,
-                        shared=None, eta=3, _prefix='', dry_run=False,
+                        eta=3, _prefix='', dry_run=False,
+                        callback=None,
                         **fit_kwargs):
-    if any(x is None for x in [n, r, s, shared, model]):
+    if any(x is None for x in [n, r, s, model]):
         raise ValueError('n, r, and s are required')
-
-    best = {k: shared[k] for k in ['val_score', 'model', 'config']}
 
     ids = [_prefix + '-' + str(i) for i in range(n)]
     params = _random_choice(params, n=len(ids))
@@ -126,9 +117,9 @@ def _successive_halving(params, model, data, n=None, r=None, s=None,
         n_i = math.floor(n * eta**-i)
         r_i = r * eta**i
         iters += r_i
-        msg = ('Training {n} models for {r} iterations during iteration {i} '
-               'of bracket={s}')
-        logger.info(msg.format(n=n_i, r=r_i, i=i, s=s))
+        msg = ('Training %d models for %d iterations during iteration %d '
+               'of bracket=%d')
+        logger.info(msg, n_i, r_i, i, s)
 
         results = {k: dask.delayed(_train)(model, data, max_iter=r_i,
                                            s=s, i=i, k=k, dry_run=dry_run,
@@ -148,23 +139,19 @@ def _successive_halving(params, model, data, n=None, r=None, s=None,
 
         models = _top_k(models, val_scores, k=max(1, math.floor(n_i / eta)))
 
-        best_ = {k: v.get() for k, v in best.items()}
-        if max(final_val_scores.values()) > best_['val_score']:
-            max_loss_key = max(final_val_scores, key=final_val_scores.get)
-            best_['val_score'] = final_val_scores[max_loss_key]
-            best_['config'] = params[max_loss_key]
-            [best[k].set(v) for k, v in best_.items()]
-            logger.info("New best val_score={} found".format(best_['val_score']))
+        if callback:
+            max_score_key = max(final_val_scores, key=final_val_scores.get)
+            update = {'val_score': final_val_scores[max_score_key],
+                      'config': params[max_score_key]}
+            logger.info("New best val_score={} found".format(update['val_score']))
+            callback(update)
 
         if len(models) == 1:
             break
 
     times = toolz.groupby('id', times)
-    #  times1 = {k: [toolz.keyfilter(lambda key: key != 'id', vi) for vi in v]
-             #  for k, v in times.items()}
     times = {k: [{k_: v_ for k_, v_ in vi.items() if k_ != 'id'} for vi in v]
              for k, v in times.items()}
-    #  assert times1 == times
     times = {k: toolz.merge_with(sum, v) for k, v in times.items()}
     return {'history': history, 'final_val_scores': final_val_scores,
             'params': params, 'models': models, 'times': times}
@@ -226,14 +213,14 @@ class Hyperband(DaskBaseSearchCV):
       https://arxiv.org/abs/1603.06560
 
     """
-    def __init__(self, model, params, max_iter=81, eta=3, n_jobs=-1, **kwargs):
+    def __init__(self, model, param_distributions, max_iter=81, eta=3, n_jobs=-1, **kwargs):
         """
         Parameters
         ----------
-        params :
-            Search space of various parameters. This mirrors the sklearn API.
         model :
             The base model to try.
+        param_distributions :
+            Search space of various parameters. This mirrors the sklearn API.
         max_iter : int
             The maximum number of iterations to train a model on, as determined
             by ``model.partial_fit``.
@@ -247,7 +234,7 @@ class Hyperband(DaskBaseSearchCV):
             (which is the default behavior). Setting ``n_jobs == 0`` can help
             preserve memory on your machine.
         """
-        self.params = params
+        self.params = param_distributions
         self.model = model
         self.R = max_iter
         self.eta = eta
@@ -286,6 +273,12 @@ class Hyperband(DaskBaseSearchCV):
                 warnings.warn('Hyperband ignores the keyword argument {k}.')
         super(Hyperband, self).__init__(model, **kwargs)
 
+    def _update_best(self, variables):
+        print(self, variables)
+        if variables['val_score'] > self.best_val_score:
+            self.best_val_score = variables['val_score']
+            self.best_params_ = variables['config']
+
     def fit(self, X, y, dry_run=False, **fit_kwargs):
         """
         This function requires an active dask.distribtued client as it uses
@@ -305,21 +298,14 @@ class Hyperband(DaskBaseSearchCV):
           function comes down to having an function ``get_params(self)``.
 
         """
-        client = _get_client()
-        variables = {'val_score': -np.inf, 'model': None, 'config': None,
-                     'eta': self.eta, 'history': []}
-        shared = {}
-        for key, value in variables.items():
-            # distributed.Variable requires client
-            shared[key] = distributed.Variable(key)
-            shared[key].set(value)
+        #  client = _get_client()
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
         data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
 
-        for key in data.keys():
-            data[key][0] = client.scatter(data[key][0])
-            data[key][1] = client.scatter(data[key][1])
+        #  for key in data.keys():
+            #  data[key][0] = client.scatter(data[key][0])
+            #  data[key][1] = client.scatter(data[key][1])
 
         # now start hyperband
         R, eta = self.R, self.eta
@@ -330,7 +316,8 @@ class Hyperband(DaskBaseSearchCV):
             n = math.ceil((B / R) * eta**s / (s + 1))
             r = R * eta ** -s
             all_kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run,
-                            'eta': eta, '_prefix': f's={s}', 'shared': shared}]
+                            'eta': eta, '_prefix': f's={s}',
+                            'callback': self._update_best}]
 
         if self.n_jobs == -1:
             futures = [dask.delayed(_successive_halving)(self.params, self.model,
@@ -439,12 +426,12 @@ def _get_best_model(val_scores, models):
     return models[best_id]
 
 
-def _get_client():
-    try:
-        return distributed.get_client()
-    except ValueError as e:
-        warnings.warn('No global distributed client found with '
-                      'distributed.get_client. To resolve this error, '
-                      'have an distributed client: '
-                      'https://distributed.readthedocs.io/en/latest/client.html')
-        raise e
+#  def _get_client():
+    #  try:
+        #  return distributed.get_client()
+    #  except ValueError as e:
+        #  warnings.warn('No global distributed client found with '
+                      #  'distributed.get_client. To resolve this error, '
+                      #  'have an distributed client: '
+                      #  'https://distributed.readthedocs.io/en/latest/client.html')
+        #  raise e
