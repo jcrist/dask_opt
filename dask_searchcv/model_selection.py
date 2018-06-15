@@ -798,24 +798,7 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
                              % self.best_estimator_)
         return self.scorer_(self.best_estimator_, X, y)
 
-    def fit(self, X, y=None, groups=None, **fit_params):
-        """Run fit with all sets of parameters.
-
-        Parameters
-        ----------
-        X : array-like, shape = [n_samples, n_features]
-            Training vector, where n_samples is the number of samples and
-            n_features is the number of features.
-        y : array-like, shape = [n_samples] or [n_samples, n_output], optional
-            Target relative to X for classification or regression;
-            None for unsupervised learning.
-        groups : array-like, shape = [n_samples], optional
-            Group labels for the samples used while splitting the dataset into
-            train/test set.
-        **fit_params
-            Parameters passed to the ``fit`` method of the estimator
-        """
-        estimator = self.estimator
+    def _check_scorer(self, estimator):
         if _HAS_MULTIPLE_METRICS:
             from sklearn.metrics.scorer import _check_multimetric_scoring
             scorer, multimetric = _check_multimetric_scoring(estimator,
@@ -840,7 +823,28 @@ class DaskBaseSearchCV(BaseEstimator, MetaEstimatorMixin):
         else:
             scorer = check_scoring(estimator, scoring=self.scoring)
             multimetric = False
+        return scorer, multimetric
 
+    def fit(self, X, y=None, groups=None, **fit_params):
+        """Run fit with all sets of parameters.
+
+        Parameters
+        ----------
+        X : array-like, shape = [n_samples, n_features]
+            Training vector, where n_samples is the number of samples and
+            n_features is the number of features.
+        y : array-like, shape = [n_samples] or [n_samples, n_output], optional
+            Target relative to X for classification or regression;
+            None for unsupervised learning.
+        groups : array-like, shape = [n_samples], optional
+            Group labels for the samples used while splitting the dataset into
+            train/test set.
+        **fit_params
+            Parameters passed to the ``fit`` method of the estimator
+        """
+        estimator = self.estimator
+
+        scorer, multimetric = self._check_scorer(estimator)
         self.scorer_ = scorer
 
         error_score = self.error_score

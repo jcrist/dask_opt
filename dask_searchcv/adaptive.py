@@ -1,6 +1,6 @@
 from timeit import default_timer
 import logging
-import warnings
+from warnings import warn
 import math
 
 import numpy as np
@@ -13,12 +13,12 @@ import toolz
 from dask_ml.model_selection._split import train_test_split
 from dask_ml.wrappers import ParallelPostFit
 
-from .model_selection import DaskBaseSearchCV, GridSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
+from .model_selection import DaskBaseSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
 logger = logging.getLogger(__name__)
 
 
-def _train(model, data, max_iter=1, dry_run=False,
+def _train(model, data, max_iter=1, dry_run=False, scorer=None,
            s=1, i=1, k='_', **fit_kwargs):
     """
     Train function. Returns validation score.
@@ -60,7 +60,7 @@ def _train(model, data, max_iter=1, dry_run=False,
     logger.info(msg, k, max_iter, fit_time)
 
     start_time = default_timer()
-    score = model.score(X_val, y_val) if not dry_run else np.random.rand()
+    score = scorer(model, X_val, y_val) if not dry_run else np.random.rand()
     score_time = default_timer() - start_time
     msg = "Fitting model {k} took {fit} seconds and scoring took {score} seconds"
     logger.info(msg.format(k=k, fit=fit_time, score=score_time))
@@ -96,11 +96,16 @@ def rec_type(d):
 
 
 def _successive_halving(params, model, data, n=None, r=None, s=None,
-                        eta=3, _prefix='', dry_run=False,
-                        callback=None,
+                        shared=None, eta=3, _prefix='', dry_run=False,
+                        scorer=None,
                         **fit_kwargs):
-    if any(x is None for x in [n, r, s, model]):
+    if any(x is None for x in [n, r, s, model, scorer]):
         raise ValueError('n, r, and s are required')
+
+    if shared:
+        best = {k: shared[k] for k in ['val_score', 'config']}
+    else:
+        best = {'val_score': -np.inf, 'config': {}}
 
     ids = [_prefix + '-' + str(i) for i in range(n)]
     params = _random_choice(params, n=len(ids))
@@ -123,7 +128,7 @@ def _successive_halving(params, model, data, n=None, r=None, s=None,
 
         results = {k: dask.delayed(_train)(model, data, max_iter=r_i,
                                            s=s, i=i, k=k, dry_run=dry_run,
-                                           **fit_kwargs)
+                                           scorer=scorer, **fit_kwargs)
                    for k, model in models.items()}
 
         results = {k: v.compute() for k, v in results.items()}
@@ -139,19 +144,34 @@ def _successive_halving(params, model, data, n=None, r=None, s=None,
 
         models = _top_k(models, val_scores, k=max(1, math.floor(n_i / eta)))
 
-        if callback:
-            max_score_key = max(final_val_scores, key=final_val_scores.get)
-            update = {'val_score': final_val_scores[max_score_key],
-                      'config': params[max_score_key]}
-            logger.info("New best val_score={} found".format(update['val_score']))
-            callback(update)
+        if shared:
+            best_ = {k: v.get() for k, v in best.items()}
+        else:
+            best_ = best
+
+        if max(final_val_scores.values()) > best_['val_score']:
+            max_loss_key = max(final_val_scores, key=final_val_scores.get)
+            best_['val_score'] = final_val_scores[max_loss_key]
+            best_['config'] = params[max_loss_key]
+            if shared:
+                [best[k].set(v) for k, v in best_.items()]
+
+            msg = "val_score={} found with params={}"
+            msg = msg.format(best_['val_score'], best['config'])
+            if shared:
+                logger.info(msg)
+            else:
+                print(msg)
 
         if len(models) == 1:
             break
 
     times = toolz.groupby('id', times)
+    #  times1 = {k: [toolz.keyfilter(lambda key: key != 'id', vi) for vi in v]
+             #  for k, v in times.items()}
     times = {k: [{k_: v_ for k_, v_ in vi.items() if k_ != 'id'} for vi in v]
              for k, v in times.items()}
+    #  assert times1 == times
     times = {k: toolz.merge_with(sum, v) for k, v in times.items()}
     return {'history': history, 'final_val_scores': final_val_scores,
             'params': params, 'models': models, 'times': times}
@@ -213,7 +233,8 @@ class Hyperband(DaskBaseSearchCV):
       https://arxiv.org/abs/1603.06560
 
     """
-    def __init__(self, model, param_distributions, max_iter=81, eta=3, n_jobs=-1, **kwargs):
+    def __init__(self, model, param_distributions, max_iter=81, eta=3,
+                 n_jobs=-1, **kwargs):
         """
         Parameters
         ----------
@@ -254,30 +275,24 @@ class Hyperband(DaskBaseSearchCV):
                              'For non-incremental models, please consider '
                              'RandomizedSearchCV instead')
         if not hasattr(est, 'warm_start'):
-            warnings.warn('model has no attribute warm_start. Hyperband will assume it '
-                          'is reusing previous calls to `partial_fit` during each call '
-                          'to `partial_fit`')
+            warn('model has no attribute warm_start. Hyperband will assume it '
+                 'is reusing previous calls to `partial_fit` during each call '
+                 'to `partial_fit`')
         else:
             if not est.warm_start:
                 raise ValueError('Hyperband relies on model(..., warm_start=True).')
 
-
         self.history = []
 
-        super_default = dict(scoring=None, iid=True, refit=True, cv=None,
+        super_default = dict(iid=True, refit=True, cv=None,
                              error_score='raise',
                              return_train_score=_RETURN_TRAIN_SCORE_DEFAULT,
                              scheduler=None, cache_cv=True)
         for k, v in super_default.items():
             if k in kwargs and kwargs[k] != super_default[k]:
-                warnings.warn('Hyperband ignores the keyword argument {k}.')
+                msg = 'Hyperband ignores the keyword argument {k}={v}.'
+                warn(msg.format(k=k, v=v))
         super(Hyperband, self).__init__(model, **kwargs)
-
-    def _update_best(self, variables):
-        print(self, variables)
-        if variables['val_score'] > self.best_val_score:
-            self.best_val_score = variables['val_score']
-            self.best_params_ = variables['config']
 
     def fit(self, X, y, dry_run=False, **fit_kwargs):
         """
@@ -298,14 +313,36 @@ class Hyperband(DaskBaseSearchCV):
           function comes down to having an function ``get_params(self)``.
 
         """
-        #  client = _get_client()
+        self.scorer_, _ = self._check_scorer(self.model)
+
+        client = _get_client()
+        if client:
+            import distributed
+            variables = {'val_score': -np.inf, 'config': None}
+
+            shared = {}
+            for key, value in variables.items():
+                # distributed.Variable requires client
+                shared[key] = distributed.Variable(key)
+                shared[key].set(value)
+        else:
+            shared = None
+            warn('Tried to set a distributed variable to allow '
+                  'partial results to be preserved. Having a '
+                  'distributed client will resolve this (though this '
+                  'will print validation loss and the config)')
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
         data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
 
-        #  for key in data.keys():
-            #  data[key][0] = client.scatter(data[key][0])
-            #  data[key][1] = client.scatter(data[key][1])
+        if client:
+            for key in data.keys():
+                data[key][0] = client.scatter(data[key][0])
+                data[key][1] = client.scatter(data[key][1])
+        else:
+            warn('Tried to scatter data with the distributed '
+                 'client, which may help relieve memory pressure. '
+                 'Having a distributed client will resolve this')
 
         # now start hyperband
         R, eta = self.R, self.eta
@@ -316,8 +353,8 @@ class Hyperband(DaskBaseSearchCV):
             n = math.ceil((B / R) * eta**s / (s + 1))
             r = R * eta ** -s
             all_kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run,
-                            'eta': eta, '_prefix': f's={s}',
-                            'callback': self._update_best}]
+                            'eta': eta, '_prefix': f's={s}', 'shared': shared,
+                            'scorer': self.scorer_}]
 
         if self.n_jobs == -1:
             futures = [dask.delayed(_successive_halving)(self.params, self.model,
@@ -426,12 +463,13 @@ def _get_best_model(val_scores, models):
     return models[best_id]
 
 
-#  def _get_client():
-    #  try:
-        #  return distributed.get_client()
-    #  except ValueError as e:
-        #  warnings.warn('No global distributed client found with '
-                      #  'distributed.get_client. To resolve this error, '
-                      #  'have an distributed client: '
-                      #  'https://distributed.readthedocs.io/en/latest/client.html')
-        #  raise e
+def _get_client():
+    try:
+        import distributed
+        return distributed.get_client()
+    except ValueError as e:
+        warn('No global distributed client found with '
+             'distributed.get_client. To resolve this warning, '
+             'have an distributed client: '
+             'https://distributed.readthedocs.io/en/latest/client.html')
+        return None

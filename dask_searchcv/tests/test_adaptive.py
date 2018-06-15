@@ -34,64 +34,73 @@ class ConstantFunction:
     def score(self, *args, **kwargs):
         return self._fn()
 
-
-def _get_client():
-    try:
-        return distributed.get_client()
-    except ValueError:
-        return Client()
+    def fit(self, *args):
+        pass
 
 
-def _with_client(fn):
-    def fn_with_client(loop, *args, **kwargs):
-        with cluster() as (s, [a, b]):
-            with Client(s['address'], loop=loop):
-                y = fn(*args, **kwargs)
-        return y
-    return fn_with_client
+def test_hyperband_test_model(loop):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+            model = ConstantFunction()
+            max_iter = 9
+
+            values = np.random.RandomState(42).rand(int(max_iter))
+            params = {'value': values}
+            with pytest.warns(UserWarning, match='model has no attribute warm_start'):
+                alg = Hyperband(model, params, max_iter=max_iter, n_jobs=0)
+
+            alg.fit(X, y)
+
+            df = pd.DataFrame(alg.cv_results_)
+            assert set(df.param_value) == set(values)
+            assert (df.test_score == df.param_value).all()  # more of a ConstantFunction test
+            assert alg.best_params_['value'] == alg.best_estimator_.value
+            assert alg.best_params_['value'] == values.max()
+            assert alg.cv_results_['test_score'][alg.best_index_] == values.max()
 
 
-@_with_client
-def test_hyperband_test_model(*args, **kwargs):
-    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = ConstantFunction()
-    max_iter = 81
-
-    values = np.random.RandomState(42).rand(int(max_iter))
-    params = {'value': values}
-    with pytest.warns(UserWarning, match='model has no attribute warm_start'):
-        alg = Hyperband(model, params, max_iter=max_iter, n_jobs=0)
-
-    alg.fit(X, y)
-
-    df = pd.DataFrame(alg.cv_results_)
-    assert set(df.param_value) == set(values)
-    assert (df.test_score == df.param_value).all()  # more of a ConstantFunction test
-    assert alg.best_params_['value'] == alg.best_estimator_.value
-    assert alg.best_params_['value'] == values.max()
-    assert alg.cv_results_['test_score'][alg.best_index_] == values.max()
+def test_hyperband_needs_partial_fit(loop):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+            model = Lasso()
+            params = {'none': None}
+            with pytest.raises(ValueError, match='models with partial_fit'):
+                Hyperband(model, params)
 
 
-@_with_client
-def test_hyperband_needs_partial_fit():
-    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = Lasso()
-    params = {'none': None}
-    with pytest.raises(ValueError, match='Hyperband only supports models with partial_fit'):
-        Hyperband(model, params)
+@pytest.mark.parametrize("n_jobs", [-1, 0, 1])
+def test_hyperband_n_jobs(loop, n_jobs):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+            model = ConstantFunction()
+            model.warm_start = True
+            params = {'value': stats.uniform(0, 1)}
+
+            if n_jobs in {-1, 0}:
+                alg = Hyperband(model, params, max_iter=9, n_jobs=n_jobs)
+                alg.fit(X, y)
+            else:
+                with pytest.raises(ValueError, match='n_jobs must be'):
+                    Hyperband(model, params, max_iter=3, n_jobs=n_jobs)
 
 
-@_with_client
-def test_hyperband_n_jobs():
-    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = ConstantFunction()
-    params = {'value': [1, 2, 3]}
+def test_score(loop):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
 
-    with pytest.raises(ValueError, match='n_jobs must be'):
-        alg = Hyperband(model, params, max_iter=3, n_jobs=1)
+            model = ConstantFunction()
+            max_iter = 9
+
+            params = {'value': stats.uniform(0, 1)}
+            with pytest.warns(UserWarning, match='warm_start'):
+                alg = Hyperband(model, params, max_iter=max_iter, n_jobs=0)
+            alg.fit(X, y).score(X, y)
 
 
-@_with_client
 def test_info():
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
 
@@ -102,8 +111,8 @@ def test_info():
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
         alg = Hyperband(model, params, max_iter=max_iter, n_jobs=0)
-
-    info = alg.info()
+    with pytest.warns(UserWarning):
+        info = alg.info()
     expect = {'brackets': [{'bracket': 0.0,
                             'bracket_iter': 0.0,
                             'num_models': 3.0,
@@ -131,32 +140,51 @@ def test_info():
     assert expect['num_cv_splits'] == 1  # TODO: change this!
 
 
-@_with_client
-def test_hyperband_with_distributions():
-    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = ConstantFunction()
-    max_iter = 81
+def test_hyperband_with_distributions(loop):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+            model = ConstantFunction()
+            max_iter = 9
 
-    values = stats.uniform(0, 1)
+            values = stats.uniform(0, 1)
 
-    params = {'value': values}
-    with pytest.warns(UserWarning, match='model has no attribute warm_start'):
-        alg = Hyperband(model, params, max_iter=max_iter, n_jobs=0)
+            params = {'value': values}
+            with pytest.warns(UserWarning, match='model has no attribute warm_start'):
+                alg = Hyperband(model, params, max_iter=max_iter, n_jobs=0)
 
-    alg.fit(X, y)
+            alg.fit(X, y)
 
-    assert len(alg.cv_results_['param_value']) == alg.info()['num_models']
+            assert len(alg.cv_results_['param_value']) == alg.info()['num_models']
 
 
 def test_hyperband_needs_client():
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-    model = Incremental(SGDClassifier(), warm_start=True)
-    params = {'value': np.logspace(-3, 0, num=100)}
+    model = ConstantFunction()
+    params = {'value': stats.uniform(0, 1)}
 
-    alg = Hyperband(model, params, max_iter=81, n_jobs=0)
-    with pytest.raises(ValueError, match='No global client'):
-        with pytest.warns(UserWarning, match='No global distributed client found'):
+    with pytest.warns(UserWarning, match='warm_start'):
+        alg = Hyperband(model, params, max_iter=9, n_jobs=0)
+    for match in ['No global distributed client found',
+                  'distributed variable',
+                  'scatter data']:
+        with pytest.warns(UserWarning, match=match):
             alg.fit(X, y)
+
+
+def test_hyperband_defaults():
+    X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+    model = SGDClassifier(warm_start=True)
+    params = {'alpha': np.logspace(-3, 0)}
+
+    not_default = dict(iid=False, refit=False, cv=1,
+                       error_score='warn',
+                       return_train_score=False,
+                       scheduler='whoops', cache_cv=False)
+    for k, v in not_default.items():
+        d = {k: v}
+        with pytest.warns(UserWarning, match='Hyperband ignores'):
+            Hyperband(model, params, max_iter=9, n_jobs=0, **d)
 
 
 def test_top_k(k=2):
@@ -167,22 +195,22 @@ def test_top_k(k=2):
     assert y == {str(i): str(i) for i in range(k)}
 
 
-@_with_client
-def test_hyperband_sklearn():
-    # This test passes very incosistently, and often throws "RuntimeError:
-    # IOLoop is closed". I rerun this by itself until it passes
-    X, y = make_classification(n_samples=1000, chunks=500)
-    classes = np.unique(y).tolist()
-    model = Incremental(SGDClassifier(),
-                        warm_start=True, loss='hinge', penalty='elasticnet')
+@pytest.mark.parametrize("n_jobs", [0, -1])
+def test_hyperband_sklearn(loop, n_jobs):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=100, chunks=50)
+            classes = np.unique(y).tolist()
+            model = Incremental(SGDClassifier(),
+                                warm_start=True, loss='hinge', penalty='elasticnet')
 
-    params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
-              'l1_ratio': np.linspace(0, 1, num=int(10e3))}
-    alg = Hyperband(model, params, max_iter=9, n_jobs=0)
+            params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
+                      'l1_ratio': np.linspace(0, 1, num=int(10e3))}
+            alg = Hyperband(model, params, max_iter=3, n_jobs=n_jobs)
 
-    alg.fit(X, y, dry_run=True, classes=classes)
-    assert len(alg.history) == 20
-    alg.fit(X, y, dry_run=True)
-    assert len(alg.history) == 40
+            alg.fit(X, y, dry_run=True, classes=classes)
+            assert len(alg.history) == 5
+            alg.fit(X, y, dry_run=True)
+            assert len(alg.history) == 10
 
-    alg.fit(X, y, classes=classes)
+            alg.fit(X, y, classes=classes)
