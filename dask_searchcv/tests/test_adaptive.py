@@ -11,6 +11,8 @@ import random
 from sklearn.linear_model import Lasso
 import time
 from dask_ml.wrappers import Incremental
+from distributed.utils_test import loop, cluster
+from distributed import Client
 
 
 class ConstantFunction:
@@ -128,7 +130,26 @@ def test_info():
     assert expect['num_cv_splits'] == 1  # TODO: change this!
 
 
-def test_hyperband_with_distributions():
+@pytest.mark.parametrize("n_jobs", [-1, 1])
+def test_hyperband_with_distributions_with_client(loop, n_jobs):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
+            model = ConstantFunction()
+
+            values = stats.uniform(0, 1)
+
+            params = {'value': values}
+            with pytest.warns(UserWarning, match='model has no attribute warm_start'):
+                alg = Hyperband(model, params, max_iter=9, n_jobs=n_jobs)
+
+            alg.fit(X, y)
+
+            assert len(alg.cv_results_['param_value']) == alg.info()['num_models']
+
+
+@pytest.mark.parametrize("n_jobs", [-1, 1])
+def test_hyperband_with_distributions(n_jobs):
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
     model = ConstantFunction()
 
@@ -136,7 +157,7 @@ def test_hyperband_with_distributions():
 
     params = {'value': values}
     with pytest.warns(UserWarning, match='model has no attribute warm_start'):
-        alg = Hyperband(model, params, max_iter=9)
+        alg = Hyperband(model, params, max_iter=9, n_jobs=n_jobs)
 
     alg.fit(X, y)
 
@@ -166,10 +187,8 @@ def test_top_k(k=2):
     assert y == {str(i): str(i) for i in range(k)}
 
 
-from distributed.utils_test import loop, cluster
-from distributed import Client
 @pytest.mark.parametrize("n_jobs", [-1, 1])
-def test_hyperband_sklearn(loop, n_jobs):
+def test_hyperband_sklearn_with_client(loop, n_jobs):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
 
@@ -181,15 +200,35 @@ def test_hyperband_sklearn(loop, n_jobs):
 
             params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
                       'l1_ratio': np.linspace(0, 1, num=int(10e3))}
-            alg = Hyperband(model, params, max_iter=3)
+            alg = Hyperband(model, params, max_iter=3, n_jobs=n_jobs)
 
             alg.fit(X, y, classes=classes)
             assert len(alg.history) == 5
-            #  alg.fit(X, y)
-            #  assert len(alg.history) == 10
 
             expected_keys = {'param_alpha', 'param_l1_ratio', 'bracket',
                              'bracket_iter', 'val_score', 'model_id',
                              'partial_fit_iters', 'num_models'}
             for hist_item in alg.history:
                 assert set(hist_item.keys()) == expected_keys
+
+
+@pytest.mark.parametrize("n_jobs", [-1, 1])
+def test_hyperband_sklearn(n_jobs):
+    X, y = make_classification(n_samples=100, chunks=50)
+    classes = np.unique(y).tolist()
+    model = Incremental(SGDClassifier(),
+                        warm_start=True, loss='hinge', penalty='elasticnet',
+                        max_iter=5)
+
+    params = {'alpha': np.logspace(-3, 0, num=int(10e3)),
+              'l1_ratio': np.linspace(0, 1, num=int(10e3))}
+    alg = Hyperband(model, params, max_iter=3, n_jobs=n_jobs)
+
+    alg.fit(X, y, classes=classes)
+    assert len(alg.history) == 5
+
+    expected_keys = {'param_alpha', 'param_l1_ratio', 'bracket',
+                     'bracket_iter', 'val_score', 'model_id',
+                     'partial_fit_iters', 'num_models'}
+    for hist_item in alg.history:
+        assert set(hist_item.keys()) == expected_keys
