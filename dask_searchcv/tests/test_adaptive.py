@@ -80,7 +80,7 @@ def test_hyperband_n_jobs(loop, n_jobs):
             params = {'value': stats.uniform(0, 1)}
 
             if n_jobs in {-1, 1}:
-                alg = Hyperband(model, params, max_iter=9, n_jobs=n_jobs)
+                alg = Hyperband(model, params, max_iter=27, n_jobs=n_jobs)
                 alg.fit(X, y)
             else:
                 with pytest.raises(ValueError, match='n_jobs must be'):

@@ -1,3 +1,4 @@
+import sys
 from timeit import default_timer
 import logging
 from warnings import warn
@@ -19,8 +20,14 @@ from dask_ml.wrappers import Incremental
 
 from .model_selection import DaskBaseSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
-import distributed
-USE_DIST = True
+try:
+    import distributed
+    USE_DIST = True
+except ModuleNotFoundError:
+    warn('The dask.distributed package is not found. Using this to search can '
+         'have some real benefits. For installation instructions, visit '
+         'https://distributed.readthedocs.io/en/latest/install.html')
+    USE_DIST = False
 
 
 logger = logging.getLogger(__name__)
@@ -53,7 +60,7 @@ def _train(model, data, max_iter=1, dry_run=False, scorer=None,
         for i, vi in enumerate(v):
             if isinstance(vi, np.ndarray):
                 data[k][i] = da.from_array(vi, chunks=10)
-            if isinstance(vi, distributed.Future):
+            if 'distributed' in sys.modules.keys() and isinstance(vi, distributed.Future):
                 data[k][i] = vi.result()
     X, y = data['train']
     X_val, y_val = data['val']
@@ -190,13 +197,7 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
                                                    s=s, i=i, k=k, dry_run=dry_run,
                                                    scorer=scorer, **fit_kwargs)
                            for k, model in models.items()}
-        results = dask.compute(delayed_results)[0]
-        #  else:
-            #  results = {k: _train(model, data, max_iter=r_i,
-                                 #  s=s, i=i, k=k, dry_run=dry_run,
-                                 #  scorer=scorer, **fit_kwargs)
-                       #  for k, model in models.items()}
-
+        results = {k: v.compute() for k, v in delayed_results.items()}
 
         val_scores = {k: r[0] for k, r in results.items()}
         times += [{'id': k, **r[1]} for k, r in results.items()]
@@ -431,7 +432,6 @@ class Hyperband(DaskBaseSearchCV):
                             'eta': eta, '_prefix': f's={s}', 'shared': shared,
                             'scorer': self.scorer_}]
 
-        print("n_jobs =", self.n_jobs)
         if self.n_jobs == -1:
             delayed_results = [dask.delayed(_successive_halving)(self.params,
                                                                  self.model,
@@ -583,6 +583,8 @@ def _get_best_model(val_scores, models):
 
 def _get_client():
     try:
+        if not USE_DIST:
+            raise ModuleNotFoundError()
         return distributed.get_client()
     except (ValueError, ModuleNotFoundError) as e:
         warn('No global distributed client found with '
