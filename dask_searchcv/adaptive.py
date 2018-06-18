@@ -12,8 +12,16 @@ import toolz
 
 from dask_ml.model_selection._split import train_test_split
 from dask_ml.wrappers import ParallelPostFit
+from dask_ml.metrics import get_scorer
+import sklearn.metrics
+import dask_ml.metrics
+from dask_ml.wrappers import Incremental
 
 from .model_selection import DaskBaseSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
+
+import distributed
+USE_DIST = True
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +53,16 @@ def _train(model, data, max_iter=1, dry_run=False, scorer=None,
         for i, vi in enumerate(v):
             if isinstance(vi, np.ndarray):
                 data[k][i] = da.from_array(vi, chunks=10)
+            if isinstance(vi, distributed.Future):
+                data[k][i] = vi.result()
     X, y = data['train']
     X_val, y_val = data['val']
     start_time = default_timer()
 
     for iter in range(int(max_iter)):
-        msg = ("Training model %d in bracket %d iteration %d. "
+        msg = ("Training model %s in bracket %d iteration %d. "
                "This model is %0.2f trained for this bracket")
-        logger.info(msg, k, s, i, percent=iter * 100.0 / max_iter)
+        logger.info(msg, k, s, i, iter * 100.0 / max_iter)
         if not dry_run:
             model.partial_fit(X, y, **fit_kwargs)
     fit_time = default_timer() - start_time
@@ -62,8 +72,8 @@ def _train(model, data, max_iter=1, dry_run=False, scorer=None,
     start_time = default_timer()
     score = scorer(model, X_val, y_val) if not dry_run else np.random.rand()
     score_time = default_timer() - start_time
-    msg = "Fitting model {k} took {fit} seconds and scoring took {score} seconds"
-    logger.info(msg.format(k=k, fit=fit_time, score=score_time))
+    msg = "Fitting model %s took %0.3f seconds and scoring took %0.3f seconds"
+    logger.info(msg, k, fit_time, score_time)
     return score, {'score_time': score_time, 'fit_time': fit_time}
 
 
@@ -158,7 +168,7 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
         best = {'val_score': -np.inf, 'config': {}}
 
     ids = [_prefix + '-' + str(i) for i in range(n)]
-    params = _random_choice(params, n=len(ids))
+    params = ParameterSampler(params, len(ids))
     params = {k: param for k, param in zip(ids, params)}
     models = {}
     final_val_scores = {k: -np.inf for k in ids}
@@ -176,12 +186,17 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
                'of bracket=%d')
         logger.info(msg, n_i, r_i, i, s)
 
-        results = {k: dask.delayed(_train)(model, data, max_iter=r_i,
-                                           s=s, i=i, k=k, dry_run=dry_run,
-                                           scorer=scorer, **fit_kwargs)
-                   for k, model in models.items()}
+        delayed_results = {k: dask.delayed(_train)(model, data, max_iter=r_i,
+                                                   s=s, i=i, k=k, dry_run=dry_run,
+                                                   scorer=scorer, **fit_kwargs)
+                           for k, model in models.items()}
+        results = dask.compute(delayed_results)[0]
+        #  else:
+            #  results = {k: _train(model, data, max_iter=r_i,
+                                 #  s=s, i=i, k=k, dry_run=dry_run,
+                                 #  scorer=scorer, **fit_kwargs)
+                       #  for k, model in models.items()}
 
-        results = {k: v.compute() for k, v in results.items()}
 
         val_scores = {k: r[0] for k, r in results.items()}
         times += [{'id': k, **r[1]} for k, r in results.items()]
@@ -189,7 +204,8 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
         final_val_scores.update(val_scores)
         history += [{'bracket': s, 'bracket_iter': i, 'val_score': val_scores[k],
                      'model_id': k, 'partial_fit_iters': iters,
-                     'num_models': len(val_scores), **params[k]}
+                     'num_models': len(val_scores),
+                     **{'param_' + _k: _v for _k, _v in params[k].items()}}
                     for k, model, in models.items()]
 
         models = _top_k(models, val_scores, k=max(1, math.floor(n_i / eta)))
@@ -284,7 +300,7 @@ class Hyperband(DaskBaseSearchCV):
 
     """
     def __init__(self, model, param_distributions, max_iter=81, eta=3,
-                 n_jobs=-1, **kwargs):
+                 n_jobs=-1, scoring=None, **kwargs):
         """
         Parameters
         ----------
@@ -302,8 +318,10 @@ class Hyperband(DaskBaseSearchCV):
             Hyperband depends on another function, and they are completely
             indepdenent of one another and can be run embarassingly parallel.
             This function is submitted to the scheduler if ``n_jobs == -1``
-            (which is the default behavior). Setting ``n_jobs == 0`` can help
+            (which is the default behavior). Setting ``n_jobs == 1`` can help
             preserve memory on your machine.
+        scoring : str | callable
+            Scoring to use on the estimator. Higher is presumed to be better.
         """
         self.params = param_distributions
         self.model = model
@@ -311,11 +329,13 @@ class Hyperband(DaskBaseSearchCV):
         self.eta = eta
         self.best_val_score = -np.inf
         self.n_iter = 0
+        self.scoring = scoring
 
-        if n_jobs not in {-1, 0}:
+        if n_jobs not in {-1, 1}:
             raise ValueError('n_jobs must be -1 (for full parallelization with '
-                             'dask) or 0 (for regular list comphrension). '
-                             'Setting n_jobs=0 can help memory overhead.')
+                             'dask) or 1 (for regular list comphrension). '
+                             'Setting n_jobs=1 can relieve memory pressure.')
+        print("__init__ n_Jobs", n_jobs)
         self.n_jobs = n_jobs
 
         est = model if not isinstance(model, ParallelPostFit) else model.estimator
@@ -342,7 +362,8 @@ class Hyperband(DaskBaseSearchCV):
             if k in kwargs and kwargs[k] != super_default[k]:
                 msg = 'Hyperband ignores the keyword argument {k}={v}.'
                 warn(msg.format(k=k, v=v))
-        super(Hyperband, self).__init__(model, **kwargs)
+        super(Hyperband, self).__init__(model, n_jobs=n_jobs,
+                                        scoring=scoring, **kwargs)
 
     def fit(self, X, y, dry_run=False, **fit_kwargs):
         """
@@ -363,12 +384,16 @@ class Hyperband(DaskBaseSearchCV):
           function comes down to having an function ``get_params(self)``.
 
         """
-        self.scorer_, _ = self._check_scorer(self.model)
+        if not self.scoring:
+            self.scorer_, _ = self._check_scorer(self.model)
+        elif isinstance(self.model, Incremental):
+            self.scorer_ = dask_ml.metrics.get_scorer(self.scoring)
+        else:
+            self.scorer_ = sklearn.metrics.get_scorer(self.scoring)
 
         client = _get_client()
-        if client:
-            import distributed
-            variables = {'val_score': -np.inf, 'config': None}
+        if USE_DIST and client:
+            variables = {'val_score': -np.inf, 'config': {}}
 
             shared = {}
             for key, value in variables.items():
@@ -385,7 +410,7 @@ class Hyperband(DaskBaseSearchCV):
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
         data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
 
-        if client:
+        if USE_DIST and client:
             for key in data.keys():
                 data[key][0] = client.scatter(data[key][0])
                 data[key][1] = client.scatter(data[key][1])
@@ -406,11 +431,15 @@ class Hyperband(DaskBaseSearchCV):
                             'eta': eta, '_prefix': f's={s}', 'shared': shared,
                             'scorer': self.scorer_}]
 
+        print("n_jobs =", self.n_jobs)
         if self.n_jobs == -1:
-            futures = [dask.delayed(_successive_halving)(self.params, self.model,
-                                                         data, **kwargs, **fit_kwargs)
-                       for kwargs in all_kwargs]
-            results = [f.compute() for f in futures]
+            delayed_results = [dask.delayed(_successive_halving)(self.params,
+                                                                 self.model,
+                                                                 data,
+                                                                 **kwargs,
+                                                                 **fit_kwargs)
+                               for kwargs in all_kwargs]
+            results = dask.compute(delayed_results)[0]
         else:
             results = [_successive_halving(self.params, self.model, data,
                                            **kwargs, **fit_kwargs)
@@ -554,9 +583,8 @@ def _get_best_model(val_scores, models):
 
 def _get_client():
     try:
-        import distributed
         return distributed.get_client()
-    except ValueError as e:
+    except (ValueError, ModuleNotFoundError) as e:
         warn('No global distributed client found with '
              'distributed.get_client. To resolve this warning, '
              'have an distributed client: '
