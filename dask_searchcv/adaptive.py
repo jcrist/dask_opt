@@ -68,6 +68,25 @@ def _train(model, data, max_iter=1, dry_run=False, scorer=None,
 
 
 def _top_k(choose_from, eval_with, k=1):
+    """
+    find the top k items from two dictionaries
+
+    Arguments
+    ---------
+    choose_from : dict
+        A dict of {k: object} pairs to choose. The "top k" of these objects
+        will be selected. This dict must have the same keys as eval_with.
+    eval_with : dict
+        The scores to evaluate with.
+    k : int, optional
+        This function returns the top k objects as ranked by eval_with
+
+    Returns
+    -------
+    top_k : dict
+        A dict of {k: object}, where the objects in this dict are in the top k
+        items as ranked by the scores in eval_with
+    """
     assert k > 0, "k must be positive"
     assert set(choose_from.keys()) == set(eval_with.keys())
 
@@ -80,25 +99,56 @@ def _top_k(choose_from, eval_with, k=1):
     return {keys[i]: choose_from[keys[i]] for i in idx[-k:]}
 
 
-def _random_choice(params, n=1):
-    configs = ParameterSampler(params, n)
-    return configs
-
-
-def rec_type(d):
-    if isinstance(d, (float, int, str, np.ndarray, da.Array)):
-        return type(d)
-    if isinstance(d, list):
-        return [rec_type(di) for di in d]
-    if isinstance(d, dict):
-        return {k: rec_type(v) for k, v in d.items()}
-    return type(d)
-
-
-def _successive_halving(params, model, data, n=None, r=None, s=None,
-                        shared=None, eta=3, _prefix='', dry_run=False,
-                        scorer=None,
+def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
+                        shared=None, _prefix='', dry_run=False, scorer=None,
                         **fit_kwargs):
+    """
+    Perform "successive halving" on a set of models: partially fit the models,
+    "kill" the worst performing 1/eta fraction, and repeat.
+
+    Arguments
+    ---------
+    params : dict
+        Parameter space to be sampled with sklearn.model_selection.ParameterSampler
+    model : sklearn Estimator
+        Class that has support for partial_fit, score and {get, set}_params
+    data : dict
+        Data to train/validate on. {'train': [X, y], 'val': [X_val, y_val]}
+    eta : int
+        This controls how aggressive the "killing" of models should be. The
+        "infinite time" theory suggest eta == np.e, about 3.
+    n : int
+        Number of models to train initially
+    r : int
+        Maximum number of times to call partial_fit on any one model
+    s : int
+        The bracket. Used for intermediate variables
+    shared : dict
+        dict of distributed.Variable's for intermediate results
+    _prefix : str
+        A prefix to make the IDs for this call to _successive_halving unique
+        from other brackets
+    dry_run : bool
+        Whether this is a dry run or not. If it is, do not train the model and
+        allow the score to be random. Setting ``dry_run=True`` is useful for
+        collecting stats.
+    scorer : callable
+        The function used to score any model.
+
+    Returns
+    -------
+    results : dict, {str: value}
+        Results of this call to _successive_halving. Has values of
+
+        history : list
+            The history of every call to the model. This will be a list of dicts,
+            and eventually found in self.history. Has keys of bracket,
+            bracket_iter, val_score, model_id, partial_fit_iters, num_models as
+            well as all the parameter keys.
+        final_val_scores :
+
+
+    """
     if any(x is None for x in [n, r, s, model, scorer]):
         raise ValueError('n, r, and s are required')
 
@@ -440,6 +490,30 @@ def _LDtoDL(ld):
 
 
 def _get_cv_results(params=None, val_scores=None, times=None):
+    """
+    Format to sklearn's cross validation results
+
+    Parameters
+    ----------
+    params : dict
+        Dict of parameters for each model
+    val_scores : dict
+        Dict of validation scores for each model
+    times : dict
+        Dict of times for each model, or really any values for each model.
+        All values are added to each result.
+
+    The keys for each dict are the IDs for each model.
+
+    Returns
+    -------
+    cv_results : list
+        A list of dicts describing each model
+    best_index_ : int
+        The integer in cv_results that represents the best performing model
+
+
+    """
     assert all([isinstance(x, dict) for x in [params, val_scores, times]])
     assert set(params.keys()) == set(val_scores.keys()) == set(times.keys())
 
@@ -458,6 +532,21 @@ def _get_cv_results(params=None, val_scores=None, times=None):
 
 
 def _get_best_model(val_scores, models):
+    """
+    Parameters
+    ----------
+    val_scores : dict
+        Floats describing how well each model performed.
+    models : dict
+        A dict of models.
+
+    The keys for both dicts are the IDs for each model
+
+    Returns
+    ------
+    The best performing model accoring to val_scores
+
+    """
     scores = {k: val_scores[k] for k in models}
     best_id = max(scores, key=scores.get)
     return models[best_id]
