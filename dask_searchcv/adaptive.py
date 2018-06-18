@@ -181,7 +181,8 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
                                                    s=s, i=i, k=k, dry_run=dry_run,
                                                    scorer=scorer, **fit_kwargs)
                            for k, model in models.items()}
-        results = dask.compute(delayed_results)[0]
+        results = {k: v.compute() for k, v in delayed_results.items()}
+        #  results = dask.compute(delayed_results)[0]
 
         val_scores = {k: r[0] for k, r in results.items()}
         times += [{'id': k, **r[1]} for k, r in results.items()]
@@ -201,9 +202,9 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
             best_['val_score'] = final_val_scores[max_loss_key]
             best_['config'] = params[max_loss_key]
 
-            msg = ("For this bracket, new best validation score of {a:0.3f} "
+            msg = ("For bracket s={s}, new best validation score of {a:0.3f} "
                    "found with params={b}")
-            msg = msg.format(a=best_['val_score'], b=best_['config'])
+            msg = msg.format(a=best_['val_score'], b=best_['config'], s=s)
             logger.info(msg)
             print(msg)
 
