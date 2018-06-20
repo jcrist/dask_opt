@@ -106,8 +106,8 @@ def _top_k(choose_from, eval_with, k=1):
 
 
 def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
-                        _prefix='', dry_run=False, scorer=None, debug=False,
-                        **fit_kwargs):
+                        _prefix='', dry_run=False, scorer=None,
+                        n_jobs=-1, **fit_kwargs):
     """
     Perform "successive halving" on a set of models: partially fit the models,
     "kill" the worst performing 1/eta fraction, and repeat.
@@ -177,7 +177,7 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
                'of bracket=%d')
         logger.info(msg, n_i, r_i, i, s)
 
-        if debug:
+        if n_jobs == 1:
             results = {k: _train(model, data, max_iter=r_i, s=s, i=i, k=k,
                                  dry_run=dry_run, scorer=scorer, **fit_kwargs)
                        for k, model in models.items()}
@@ -190,7 +190,7 @@ def _successive_halving(params, model, data, eta=3, n=None, r=None, s=None,
             #  results = dask.compute(delayed_results)[0]
 
         val_scores = {k: r[0] for k, r in results.items()}
-        times += [{'id': k, **r[1]} for k, r in results.items()]
+        times += [dict(id=k, **r[1]) for k, r in results.items()]
 
         final_val_scores.update(val_scores)
         history += [{'bracket': s, 'bracket_iter': i, 'val_score': val_scores[k],
@@ -281,7 +281,7 @@ class Hyperband(DaskBaseSearchCV):
 
     """
     def __init__(self, model, param_distributions, max_iter=81, eta=3,
-                 n_jobs=-1, scoring=None, debug=False, **kwargs):
+                 n_jobs=-1, scoring=None, **kwargs):
         """
         Parameters
         ----------
@@ -303,9 +303,6 @@ class Hyperband(DaskBaseSearchCV):
             preserve memory on your machine.
         scoring : str | callable
             Scoring to use on the estimator. Higher is presumed to be better.
-        debug : bool
-            Whether to provide easier-to-follow tracebacks by eliminating any
-            places for parallel speedups.
         """
         self.params = param_distributions
         self.model = model
@@ -314,7 +311,6 @@ class Hyperband(DaskBaseSearchCV):
         self.best_val_score = -np.inf
         self.n_iter = 0
         self.scoring = scoring
-        self.debug = debug
 
         if n_jobs not in {-1, 1}:
             raise ValueError('n_jobs must be -1 (for full parallelization with '
@@ -364,6 +360,7 @@ class Hyperband(DaskBaseSearchCV):
         * supports ``sklearn.base.clone(self, safe=True)``. Support for this
           function comes down to having an function ``get_params(self)``.
 
+        All functions will take Dask arrays as input.
         To relieve memory pressure, it is recommended to scatter the input data
         (``X`` and ``y``) before calling ``fit``.
 
@@ -376,7 +373,13 @@ class Hyperband(DaskBaseSearchCV):
             self.scorer_ = sklearn.metrics.get_scorer(self.scoring)
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
-        data = {'train': [X_train, y_train], 'val': [X_val, y_val]}
+        data = {'val': [X_val, y_val], 'train': [X_train, y_train]}
+        client = _get_client()
+        if client:
+            client.scatter(data)
+            for k, v in data.items():
+                for vi in v:
+                    client.scatter(vi)
 
         # now start hyperband
         R, eta = self.R, self.eta
@@ -388,8 +391,9 @@ class Hyperband(DaskBaseSearchCV):
             r = R * eta ** -s
             all_kwargs += [{'s': s, 'n': n, 'r': r, 'dry_run': dry_run,
                             'eta': eta, '_prefix': 's={}'.format(s),
-                            'debug': self.debug, 'scorer': self.scorer_}]
-        if self.debug or self.n_jobs == 1:
+                            'n_jobs': self.n_jobs,
+                            'scorer': self.scorer_}]
+        if self.n_jobs == 1:
             results = [_successive_halving(self.params, self.model, data,
                                            **kwargs, **fit_kwargs)
                        for kwargs in all_kwargs]
@@ -401,6 +405,7 @@ class Hyperband(DaskBaseSearchCV):
                                                                  **fit_kwargs)
                                for kwargs in all_kwargs]
             results = [r.compute() for r in delayed_results]
+            #  results = dask.compute(delayed_results)
 
         all_keys = [key for r in results for key in r['params'].keys()]
         history = sum([r['history'] for r in results], [])
@@ -536,3 +541,11 @@ def _get_best_model(val_scores, models):
     scores = {k: val_scores[k] for k in models}
     best_id = max(scores, key=scores.get)
     return models[best_id]
+
+
+def _get_client():
+    try:
+        import distributed
+        return distributed.get_client()
+    except ValueError:
+        return None
