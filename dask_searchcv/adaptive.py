@@ -47,26 +47,28 @@ def _train(model, data, max_iter=1, dry_run=False, scorer=None,
     times : dict. keys of ``fit_time`` and ``score_time``, values in seconds.
 
     """
-    for _k, _v in data.items():
-        for i, vi in enumerate(_v):
-            if isinstance(vi, np.ndarray):
-                data[_k][i] = da.from_array(vi, chunks=10)
-    X, y = data['train']
-    X_val, y_val = data['val']
-    start_time = default_timer()
+    for i, di in enumerate(data):
+        if isinstance(di, np.ndarray):
+            if di.ndim == 1 and i == 0:
+                di = di.reshape(-1, 1)
+            data[i] = da.from_array(di, chunks=di.shape)
 
+    X, y = data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15)
+
+    start_time = default_timer()
     for iter in range(int(max_iter)):
         msg = ("Training model %s in bracket %d iteration %d. "
                "This model is %0.2f trained for this bracket")
         logger.info(msg, k, s, i, iter * 100.0 / max_iter)
         if not dry_run:
-            model.partial_fit(X, y, **fit_kwargs)
+            model.partial_fit(X_train, y_train, **fit_kwargs)
     fit_time = default_timer() - start_time
     msg = ("Training model %s for %d partial_fit calls took %0.2f seconds")
     logger.info(msg, k, max_iter, fit_time)
 
     start_time = default_timer()
-    score = scorer(model, X_val, y_val) if not dry_run else np.random.rand()
+    score = scorer(model, X_test, y_test) if not dry_run else np.random.rand()
     score_time = default_timer() - start_time
     msg = "Fitting model %s took %0.3f seconds and scoring took %0.3f seconds"
     logger.info(msg, k, fit_time, score_time)
@@ -372,14 +374,10 @@ class Hyperband(DaskBaseSearchCV):
         else:
             self.scorer_ = sklearn.metrics.get_scorer(self.scoring)
 
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1)
-        data = {'val': [X_val, y_val], 'train': [X_train, y_train]}
+        data = [X, y]
         client = _get_client()
         if client:
             client.scatter(data)
-            for k, v in data.items():
-                for vi in v:
-                    client.scatter(vi)
 
         # now start hyperband
         R, eta = self.R, self.eta
