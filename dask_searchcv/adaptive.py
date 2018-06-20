@@ -17,6 +17,7 @@ from dask_ml.metrics import get_scorer
 import sklearn.metrics
 import dask_ml.metrics
 from dask_ml.wrappers import Incremental
+from joblib import Parallel, delayed
 
 from .model_selection import DaskBaseSearchCV, _RETURN_TRAIN_SCORE_DEFAULT
 
@@ -313,11 +314,6 @@ class Hyperband(DaskBaseSearchCV):
         self.best_val_score = -np.inf
         self.n_iter = 0
         self.scoring = scoring
-
-        if n_jobs not in {-1, 1}:
-            raise ValueError('n_jobs must be -1 (for full parallelization with '
-                             'dask) or 1 (for regular list comphrension). '
-                             'Setting n_jobs=1 can relieve memory pressure.')
         self.n_jobs = n_jobs
 
         est = model if not isinstance(model, ParallelPostFit) else model.estimator
@@ -391,19 +387,11 @@ class Hyperband(DaskBaseSearchCV):
                             'eta': eta, '_prefix': 's={}'.format(s),
                             'n_jobs': self.n_jobs,
                             'scorer': self.scorer_}]
-        if self.n_jobs == 1:
-            results = [_successive_halving(self.params, self.model, data,
-                                           **kwargs, **fit_kwargs)
-                       for kwargs in all_kwargs]
-        else:
-            delayed_results = [dask.delayed(_successive_halving)(self.params,
-                                                                 self.model,
-                                                                 data,
-                                                                 **kwargs,
-                                                                 **fit_kwargs)
-                               for kwargs in all_kwargs]
-            results = [r.compute() for r in delayed_results]
-            #  results = dask.compute(delayed_results)
+
+        parallel = Parallel(n_jobs=self.n_jobs)
+        results = parallel(delayed(_successive_halving)(self.params, self.model, data,
+                                                        **kwargs, **fit_kwargs)
+                           for kwargs in all_kwargs)
 
         all_keys = [key for r in results for key in r['params'].keys()]
         history = sum([r['history'] for r in results], [])

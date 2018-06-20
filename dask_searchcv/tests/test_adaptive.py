@@ -65,19 +65,15 @@ def test_hyperband_needs_partial_fit():
         Hyperband(model, params)
 
 
-@pytest.mark.parametrize("n_jobs", [-1, 0, 1, 2])
+@pytest.mark.parametrize("n_jobs", [-1, 1, 2])
 def test_hyperband_n_jobs(n_jobs):
     X, y = make_classification(n_samples=20, n_features=20, chunks=20)
     model = ConstantFunction()
     model.warm_start = True
     params = {'value': stats.uniform(0, 1)}
 
-    if n_jobs in {-1, 1}:
-        alg = Hyperband(model, params, max_iter=27, n_jobs=n_jobs)
-        alg.fit(X, y)
-    else:
-        with pytest.raises(ValueError, match='n_jobs must be'):
-            Hyperband(model, params, max_iter=27, n_jobs=n_jobs)
+    alg = Hyperband(model, params, max_iter=27, n_jobs=n_jobs)
+    alg.fit(X, y)
 
 
 def test_score():
