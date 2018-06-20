@@ -42,7 +42,6 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.svm import SVC
 
 import dask_searchcv as dcv
-from dask_searchcv.model_selection import cross_validatation_score
 from dask_searchcv.model_selection import (compute_n_splits, check_cv,
                                            _normalize_n_jobs, _normalize_scheduler)
 from dask_searchcv._compat import _HAS_MULTIPLE_METRICS
@@ -696,20 +695,3 @@ def test_cv_multiplemetrics_no_refit():
     assert hasattr(a, 'best_index_') is hasattr(b, 'best_index_')
     assert hasattr(a, 'best_estimator_') is hasattr(b, 'best_estimator_')
     assert hasattr(a, 'best_score_') is hasattr(b, 'best_score_')
-
-
-@pytest.mark.parametrize("cv", [None, 3])
-@pytest.mark.parametrize("scoring", [None, "accuracy"])
-def test_cross_validatation_score(cv, scoring):
-    X, y = make_classification(random_state=0)
-    clf = SVC(random_state=0)
-    clf.fit(X, y)
-    score = cross_validatation_score(clf, X, y, cv=cv, scoring=scoring)
-    assert isinstance(score, float)
-
-
-def test_cross_validatation_score_not_fitted():
-    X, y = make_classification(random_state=0)
-    clf = SVC(random_state=0)
-    with pytest.raises(NotFittedError):
-        cross_validatation_score(clf, X, y)

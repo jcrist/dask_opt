@@ -589,17 +589,6 @@ def _do_featureunion(dsk, next_token, est, cv, fields, tokens, params, Xs, ys,
     return [(fit_name, i) for i in out], [(tr_name, i) for i in out]
 
 
-def cross_validatation_score(est, X, y=None, scoring=None, cv=None):
-    cv = check_cv(cv)
-    #  n_and_fit_params = _get_fit_params(cv, fit_params, cv.n_splits)
-    # TODO: copy/paste from DaskBaseSearchCV.fit here with multimetric scoring
-    scorer = check_scoring(est, scoring=scoring)
-
-    scores = [scorer(est, X[test_idx], y[test_idx])
-              for train_idx, test_idx in cv.split(X)]
-    return sum(scores) / len(scores)
-
-
 # ------------ #
 # CV splitting #
 # ------------ #
