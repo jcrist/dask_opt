@@ -1,16 +1,16 @@
 dask-searchcv
 =============
 
-Dask-SearchCV is now included in `Dask-ML <http://dask-ml.readthedocs.io/>_`.
+Dask-SearchCV is now included in `Dask-ML <http://dask-ml.readthedocs.io/>`__.
 
 Further development to Dask-SearchCV is occuring in the
-`Dask-ML <https://github.com/dask/dask-ml>_` repository. Please post issues
+`Dask-ML repository <https://github.com/dask/dask-ml>`__. Please post issues
 and make pull requests there.
 
 |Travis Status| |Doc Status| |Conda Badge| |PyPI Badge|
 
 Tools for performing hyperparameter search with
-`Scikit-Learn <http://scikit-learn.org>`_ and `Dask <http://dask.pydata.org>`_.
+`Scikit-Learn <http://scikit-learn.org>`__ and `Dask <http://dask.pydata.org>`__.
 
 Highlights
 ----------
@@ -29,7 +29,7 @@ Highlights
   more efficient as it can avoid expensive repeated computations.
 
 
-For more information, check out the `documentation <http://dask-searchcv.readthedocs.io>`_.
+For more information, check out the `documentation <http://dask-searchcv.readthedocs.io>`__.
 
 
 Install
